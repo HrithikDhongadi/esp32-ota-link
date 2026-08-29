@@ -31,6 +31,7 @@ Working on real hardware:
 Not implemented yet:
 
 - automatic reboot/reconnect after update
+- OTA_DATA retry logic
 - Rollback handling
 - Firmware signing/security
 
@@ -95,6 +96,8 @@ From the repository root:
 python3 -m host.espctl --port /dev/ttyUSB0 ping
 python3 -m host.espctl --port /dev/ttyUSB0 info
 python3 -m host.espctl --port /dev/ttyUSB0 reboot
+python3 -m host.espctl --port /dev/ttyUSB0 update firmware/build/esp32_serial_ota.bin
+python3 -m host.espctl --port /dev/ttyUSB0 abort
 ```
 
 Recommended during development:
@@ -110,13 +113,35 @@ espctl> ping
 espctl> info
 espctl> reboot
 espctl> update firmware/build/esp32_serial_ota.bin
-espctl> end
 espctl> abort
 espctl> quit
 ```
 
 Many ESP32 dev boards reset when the serial port opens. The shell mode keeps the
 port open, so repeated commands do not reset the board.
+
+The `update` command sends `OTA_BEGIN`, all `OTA_DATA` chunks, and `OTA_END`.
+After a successful update, run `reboot` to boot the finalized image.
+
+## Proven OTA Flow
+
+This has been tested on hardware:
+
+```text
+Before update:
+Firmware:          0.1.1
+Running partition: ota_1
+
+Update:
+OTA begin accepted
+Uploading:         100%
+OTA data transferred
+OTA finalized
+
+After reboot:
+Firmware:          0.1.2
+Running partition: ota_0
+```
 
 ## Example Info Output
 
