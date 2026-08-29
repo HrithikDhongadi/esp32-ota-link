@@ -9,8 +9,12 @@ import zlib
 MAGIC = b"\xAA\x55"
 VERSION = 1
 MAX_PAYLOAD = 1024
+OTA_DATA_HEADER_SIZE = 8
+OTA_CHUNK_DATA_SIZE = MAX_PAYLOAD - OTA_DATA_HEADER_SIZE
 HEADER = struct.Struct("<2sBBHH")
 CRC = struct.Struct("<I")
+OTA_BEGIN = struct.Struct("<I32s")
+OTA_DATA = struct.Struct("<II")
 
 
 class Command(IntEnum):
@@ -71,6 +75,26 @@ def build_packet(command: int, sequence: int, payload: bytes = b"") -> bytes:
     header = HEADER.pack(MAGIC, VERSION, command, sequence, len(payload))
     crc_input = header[2:] + payload
     return header + payload + CRC.pack(_crc32(crc_input))
+
+
+def build_ota_begin_payload(firmware_size: int, sha256: bytes) -> bytes:
+    if not 0 < firmware_size <= 0xFFFFFFFF:
+        raise ValueError("firmware_size must fit in uint32")
+    if len(sha256) != 32:
+        raise ValueError("sha256 must be exactly 32 bytes")
+    return OTA_BEGIN.pack(firmware_size, sha256)
+
+
+def build_ota_data_payload(chunk_number: int, offset: int, data: bytes) -> bytes:
+    if not 0 <= chunk_number <= 0xFFFFFFFF:
+        raise ValueError("chunk_number must fit in uint32")
+    if not 0 <= offset <= 0xFFFFFFFF:
+        raise ValueError("offset must fit in uint32")
+    if len(data) > OTA_CHUNK_DATA_SIZE:
+        raise PacketTooLarge(f"chunk data exceeds {OTA_CHUNK_DATA_SIZE} bytes")
+    if len(data) == 0:
+        raise ValueError("chunk data cannot be empty")
+    return OTA_DATA.pack(chunk_number, offset) + data
 
 
 class PacketParser:

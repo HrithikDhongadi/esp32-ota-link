@@ -7,6 +7,8 @@
 #define HEADER_SIZE 8
 #define CRC_SIZE 4
 
+static uint8_t s_tx_buffer[HEADER_SIZE + PROTOCOL_MAX_PAYLOAD + CRC_SIZE];
+
 static uint16_t read_le16(const uint8_t *data)
 {
     return (uint16_t)data[0] | ((uint16_t)data[1] << 8);
@@ -97,21 +99,19 @@ bool protocol_parser_feed(protocol_parser_t *parser, uint8_t byte, protocol_pack
 
 void protocol_send_packet(uint8_t command, uint16_t sequence, const uint8_t *payload, uint16_t length)
 {
-    uint8_t out[HEADER_SIZE + PROTOCOL_MAX_PAYLOAD + CRC_SIZE];
-
-    out[0] = PROTOCOL_MAGIC_0;
-    out[1] = PROTOCOL_MAGIC_1;
-    out[2] = PROTOCOL_VERSION;
-    out[3] = command;
-    write_le16(&out[4], sequence);
-    write_le16(&out[6], length);
+    s_tx_buffer[0] = PROTOCOL_MAGIC_0;
+    s_tx_buffer[1] = PROTOCOL_MAGIC_1;
+    s_tx_buffer[2] = PROTOCOL_VERSION;
+    s_tx_buffer[3] = command;
+    write_le16(&s_tx_buffer[4], sequence);
+    write_le16(&s_tx_buffer[6], length);
     if (length > 0 && payload != NULL) {
-        memcpy(&out[HEADER_SIZE], payload, length);
+        memcpy(&s_tx_buffer[HEADER_SIZE], payload, length);
     }
 
-    uint32_t crc = protocol_crc32(&out[2], HEADER_SIZE - 2 + length);
-    write_le32(&out[HEADER_SIZE + length], crc);
-    uart_write_bytes(UART_PORT, out, HEADER_SIZE + length + CRC_SIZE);
+    uint32_t crc = protocol_crc32(&s_tx_buffer[2], HEADER_SIZE - 2 + length);
+    write_le32(&s_tx_buffer[HEADER_SIZE + length], crc);
+    uart_write_bytes(UART_PORT, s_tx_buffer, HEADER_SIZE + length + CRC_SIZE);
 }
 
 void protocol_send_ack(uint16_t sequence)

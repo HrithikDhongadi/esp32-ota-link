@@ -1,6 +1,14 @@
 import struct
 
-from host.protocol import Command, PacketParser, build_packet, parse_info_payload
+from host.protocol import (
+    Command,
+    PacketParser,
+    OTA_CHUNK_DATA_SIZE,
+    build_ota_data_payload,
+    build_ota_begin_payload,
+    build_packet,
+    parse_info_payload,
+)
 
 
 def test_build_and_parse_minimum_packet():
@@ -53,3 +61,23 @@ def test_parse_info_payload():
     assert info["boot_count"] == 7
     assert info["chip_model"] == "ESP32"
     assert info["running_partition"] == "ota_0"
+
+
+def test_build_ota_begin_payload():
+    payload = build_ota_begin_payload(1234, bytes(range(32)))
+    firmware_size, sha256 = struct.unpack("<I32s", payload)
+    assert firmware_size == 1234
+    assert sha256 == bytes(range(32))
+
+
+def test_build_ota_data_payload():
+    payload = build_ota_data_payload(2, 1016, b"abc")
+    chunk_number, offset = struct.unpack("<II", payload[:8])
+    assert chunk_number == 2
+    assert offset == 1016
+    assert payload[8:] == b"abc"
+
+
+def test_ota_chunk_data_size_fits_protocol_payload():
+    payload = build_ota_data_payload(0, 0, b"x" * OTA_CHUNK_DATA_SIZE)
+    assert len(payload) == 1024

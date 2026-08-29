@@ -29,6 +29,13 @@ typedef enum {
     ERR_CRC_ERROR = 0x03,
     ERR_INVALID_LENGTH = 0x04,
     ERR_BUSY = 0x05,
+    ERR_OTA_ALREADY_STARTED = 0x10,
+    ERR_OTA_NOT_STARTED = 0x11,
+    ERR_OTA_INVALID_OFFSET = 0x12,
+    ERR_OTA_FLASH_ERROR = 0x13,
+    ERR_OTA_HASH_MISMATCH = 0x14,
+    ERR_OTA_INVALID_IMAGE = 0x15,
+    ERR_OTA_SIZE_ERROR = 0x16,
 } protocol_error_t;
 
 typedef struct {

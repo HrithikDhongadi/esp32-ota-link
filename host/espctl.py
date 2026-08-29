@@ -1,11 +1,23 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+from pathlib import Path
 import shlex
 import sys
 import time
 
-from .protocol import Command, ErrorCode, Packet, PacketParser, build_packet, parse_info_payload
+from .protocol import (
+    Command,
+    ErrorCode,
+    Packet,
+    PacketParser,
+    OTA_CHUNK_DATA_SIZE,
+    build_ota_data_payload,
+    build_ota_begin_payload,
+    build_packet,
+    parse_info_payload,
+)
 
 SERIAL_READ_TIMEOUT = 0.02
 
@@ -91,19 +103,19 @@ def open_client(args: argparse.Namespace) -> EspCtlClient:
     return EspCtlClient(args.port, args.baud, args.timeout, args.retries)
 
 
-def ensure_ack(packet: Packet) -> None:
+def ensure_ack(packet: Packet, context: str = "command") -> None:
     if packet.command == Command.ACK:
         status = packet.payload[0] if packet.payload else ErrorCode.OK
         if status == ErrorCode.OK:
             return
-        raise SystemExit(f"Device returned ACK status {status}")
+        raise SystemExit(f"Device returned ACK status {status} during {context}")
 
     if packet.command == Command.NACK:
         code = packet.payload[0] if packet.payload else ErrorCode.INVALID_PACKET
         name = ErrorCode(code).name if code in ErrorCode._value2member_map_ else f"0x{code:02X}"
-        raise SystemExit(f"Device rejected command: {name}")
+        raise SystemExit(f"Device rejected {context}: {name}")
 
-    raise SystemExit(f"Unexpected response command: 0x{packet.command:02X}")
+    raise SystemExit(f"Unexpected response command during {context}: 0x{packet.command:02X}")
 
 
 def run_ping(client: EspCtlClient, port: str) -> None:
@@ -112,7 +124,7 @@ def run_ping(client: EspCtlClient, port: str) -> None:
     except TimeoutError as exc:
         raise SystemExit(f"No response from device on {port}") from exc
 
-    ensure_ack(packet)
+    ensure_ack(packet, "PING")
     print("Device responded")
 
 
@@ -123,7 +135,7 @@ def run_info(client: EspCtlClient, port: str, timeout: float) -> None:
         raise SystemExit(f"No GET_INFO response from device on {port}") from exc
 
     if packet.command == Command.NACK:
-        ensure_ack(packet)
+        ensure_ack(packet, "GET_INFO")
     if packet.command != Command.INFO:
         raise SystemExit(f"Unexpected response command: 0x{packet.command:02X}")
 
@@ -146,8 +158,93 @@ def run_reboot(client: EspCtlClient, port: str) -> None:
     except TimeoutError as exc:
         raise SystemExit(f"No response from device on {port}") from exc
 
-    ensure_ack(packet)
+    ensure_ack(packet, "REBOOT")
     print("Reboot requested")
+
+
+def firmware_metadata(path: Path) -> tuple[int, bytes, bytes]:
+    size = path.stat().st_size
+    if size < 32:
+        raise SystemExit(f"Firmware file is too small to be an ESP-IDF image: {path}")
+
+    digest = hashlib.sha256()
+    with path.open("rb") as firmware:
+        for chunk in iter(lambda: firmware.read(64 * 1024), b""):
+            digest.update(chunk)
+
+    with path.open("rb") as firmware:
+        firmware.seek(-32, 2)
+        image_digest = firmware.read(32)
+
+    return size, digest.digest(), image_digest
+
+
+def run_update_begin(client: EspCtlClient, port: str, firmware_path: Path) -> None:
+    if not firmware_path.is_file():
+        raise SystemExit(f"Firmware file not found: {firmware_path}")
+
+    size, file_sha256, image_sha256 = firmware_metadata(firmware_path)
+    print(f"Firmware:          {firmware_path}")
+    print(f"Size:              {size} bytes")
+    print(f"File SHA256:       {file_sha256.hex()}")
+    print(f"Image SHA256:      {image_sha256.hex()}")
+
+    payload = build_ota_begin_payload(size, image_sha256)
+    try:
+        packet = client.request(Command.OTA_BEGIN, payload, timeout=5.0)
+    except TimeoutError as exc:
+        raise SystemExit(f"No OTA_BEGIN response from device on {port}") from exc
+
+    ensure_ack(packet, "OTA_BEGIN")
+    print("OTA begin accepted")
+
+
+def run_update_data(client: EspCtlClient, port: str, firmware_path: Path, size: int) -> None:
+    sent = 0
+    chunk_number = 0
+
+    with firmware_path.open("rb") as firmware:
+        while True:
+            chunk = firmware.read(OTA_CHUNK_DATA_SIZE)
+            if not chunk:
+                break
+
+            payload = build_ota_data_payload(chunk_number, sent, chunk)
+            try:
+                packet = client.request(Command.OTA_DATA, payload, timeout=5.0)
+            except TimeoutError as exc:
+                raise SystemExit(
+                    f"No OTA_DATA response from device on {port} at offset {sent}"
+                ) from exc
+
+            ensure_ack(packet, f"OTA_DATA chunk={chunk_number} offset={sent}")
+            sent += len(chunk)
+            chunk_number += 1
+            percent = (sent * 100) // size
+            print(f"\rUploading:         {percent:3d}% ({sent}/{size} bytes)", end="")
+
+    print()
+    print("OTA data transferred")
+
+
+def run_update_end(client: EspCtlClient, port: str) -> None:
+    try:
+        packet = client.request(Command.OTA_END, timeout=10.0)
+    except TimeoutError as exc:
+        raise SystemExit(f"No OTA_END response from device on {port}") from exc
+
+    ensure_ack(packet, "OTA_END")
+    print("OTA finalized")
+
+
+def run_abort(client: EspCtlClient, port: str) -> None:
+    try:
+        packet = client.request(Command.OTA_ABORT)
+    except TimeoutError as exc:
+        raise SystemExit(f"No OTA_ABORT response from device on {port}") from exc
+
+    ensure_ack(packet, "OTA_ABORT")
+    print("OTA aborted")
 
 
 def cmd_ping(args: argparse.Namespace) -> int:
@@ -177,9 +274,34 @@ def cmd_reboot(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_update(args: argparse.Namespace) -> int:
+    client = open_client(args)
+    try:
+        firmware_path = Path(args.firmware)
+        if not firmware_path.is_file():
+            raise SystemExit(f"Firmware file not found: {firmware_path}")
+        size, _file_sha256, _image_sha256 = firmware_metadata(firmware_path)
+        run_update_begin(client, args.port, firmware_path)
+        run_update_data(client, args.port, firmware_path, size)
+        run_update_end(client, args.port)
+        print("Run 'reboot' to boot the finalized image.")
+    finally:
+        client.close()
+    return 0
+
+
+def cmd_abort(args: argparse.Namespace) -> int:
+    client = open_client(args)
+    try:
+        run_abort(client, args.port)
+    finally:
+        client.close()
+    return 0
+
+
 def cmd_shell(args: argparse.Namespace) -> int:
     client = open_client(args)
-    print(f"Connected to {args.port}. Commands: ping, info, reboot, quit")
+    print(f"Connected to {args.port}. Commands: ping, info, reboot, update <bin>, end, abort, quit")
     try:
         while True:
             try:
@@ -201,6 +323,23 @@ def cmd_shell(args: argparse.Namespace) -> int:
                 run_info(client, args.port, args.timeout)
             elif command == "reboot":
                 run_reboot(client, args.port)
+            elif command == "update":
+                if len(parts) != 2:
+                    print("Usage: update <firmware.bin>")
+                    continue
+                firmware_path = Path(parts[1])
+                if not firmware_path.is_file():
+                    print(f"Firmware file not found: {firmware_path}")
+                    continue
+                size, _file_sha256, _image_sha256 = firmware_metadata(firmware_path)
+                run_update_begin(client, args.port, firmware_path)
+                run_update_data(client, args.port, firmware_path, size)
+                run_update_end(client, args.port)
+                print("Run 'reboot' to boot the finalized image.")
+            elif command == "end":
+                run_update_end(client, args.port)
+            elif command == "abort":
+                run_abort(client, args.port)
             else:
                 print(f"Unknown command: {command}")
     finally:
@@ -220,6 +359,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("ping").set_defaults(func=cmd_ping)
     subparsers.add_parser("info").set_defaults(func=cmd_info)
     subparsers.add_parser("reboot").set_defaults(func=cmd_reboot)
+    update_parser = subparsers.add_parser("update")
+    update_parser.add_argument("firmware", help="Firmware .bin file")
+    update_parser.set_defaults(func=cmd_update)
+    subparsers.add_parser("abort").set_defaults(func=cmd_abort)
     subparsers.add_parser("shell").set_defaults(func=cmd_shell)
     return parser
 
