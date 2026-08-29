@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Python tooling
+.venv/
+venv/
+env/
+
+# ESP-IDF generated files
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/managed_components/
+firmware/dependencies.lock
+
+# Local installer/config artifacts
+eim_config.toml
+
+# Editor noise
+.vscode/ipch/
+.vscode/.browse.VC.db*
