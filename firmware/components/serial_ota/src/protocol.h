@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "driver/uart.h"
 
 #define PROTOCOL_MAGIC_0 0xAA
 #define PROTOCOL_MAGIC_1 0x55
@@ -53,6 +54,7 @@ typedef struct {
 
 void protocol_parser_init(protocol_parser_t *parser);
 bool protocol_parser_feed(protocol_parser_t *parser, uint8_t byte, protocol_packet_t *packet);
+void protocol_set_uart_port(uart_port_t uart_port);
 void protocol_send_packet(uint8_t command, uint16_t sequence, const uint8_t *payload, uint16_t length);
 void protocol_send_ack(uint16_t sequence);
 void protocol_send_nack(uint16_t sequence, protocol_error_t error);

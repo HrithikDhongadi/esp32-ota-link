@@ -3,10 +3,10 @@
 #include <string.h>
 #include "driver/uart.h"
 
-#define UART_PORT UART_NUM_0
 #define HEADER_SIZE 8
 #define CRC_SIZE 4
 
+static uart_port_t s_uart_port = UART_NUM_0;
 static uint8_t s_tx_buffer[HEADER_SIZE + PROTOCOL_MAX_PAYLOAD + CRC_SIZE];
 
 static uint16_t read_le16(const uint8_t *data)
@@ -97,6 +97,11 @@ bool protocol_parser_feed(protocol_parser_t *parser, uint8_t byte, protocol_pack
     return true;
 }
 
+void protocol_set_uart_port(uart_port_t uart_port)
+{
+    s_uart_port = uart_port;
+}
+
 void protocol_send_packet(uint8_t command, uint16_t sequence, const uint8_t *payload, uint16_t length)
 {
     s_tx_buffer[0] = PROTOCOL_MAGIC_0;
@@ -111,7 +116,7 @@ void protocol_send_packet(uint8_t command, uint16_t sequence, const uint8_t *pay
 
     uint32_t crc = protocol_crc32(&s_tx_buffer[2], HEADER_SIZE - 2 + length);
     write_le32(&s_tx_buffer[HEADER_SIZE + length], crc);
-    uart_write_bytes(UART_PORT, s_tx_buffer, HEADER_SIZE + length + CRC_SIZE);
+    uart_write_bytes(s_uart_port, s_tx_buffer, HEADER_SIZE + length + CRC_SIZE);
 }
 
 void protocol_send_ack(uint16_t sequence)

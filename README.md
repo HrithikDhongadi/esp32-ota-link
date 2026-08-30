@@ -9,6 +9,7 @@ The project has two pieces:
 
 The current firmware supports a custom binary packet protocol with `PING`,
 `GET_INFO`, `REBOOT`, `OTA_BEGIN`, `OTA_DATA`, `OTA_END`, and `OTA_ABORT`.
+The OTA firmware side is packaged as a reusable ESP-IDF component.
 
 ## Current Status
 
@@ -38,12 +39,73 @@ Not implemented yet:
 ## Project Layout
 
 ```text
-firmware/       ESP-IDF application
-host/           Python host CLI and protocol implementation
-protocol/       Wire protocol documentation
-tests/          Host-side protocol tests
-plan.md         Original full project roadmap
+firmware/
+  components/
+    serial_ota/        Reusable ESP-IDF serial OTA component
+  main/                Small example app using the component
+  partitions.csv       OTA-capable partition table
+  sdkconfig.defaults   Required default ESP-IDF settings
+host/                  Python host CLI and protocol implementation
+protocol/              Wire protocol documentation
+tests/                 Host-side protocol tests
+plan.md                Original full project roadmap
 ```
+
+## Reusing The Component
+
+Copy this directory into any ESP-IDF project:
+
+```text
+firmware/components/serial_ota
+```
+
+Then add the component to your app's `main/CMakeLists.txt`:
+
+```cmake
+idf_component_register(
+    SRCS "main.c"
+    INCLUDE_DIRS "."
+    REQUIRES serial_ota
+)
+```
+
+Start the updater from your app:
+
+```c
+#include "serial_ota.h"
+
+void app_main(void)
+{
+    ESP_ERROR_CHECK(serial_ota_start());
+
+    // Your blink, motor, sensor, or product logic can run here.
+}
+```
+
+By default, `serial_ota_start()` uses:
+
+```text
+UART:        UART_NUM_0
+Baud:        115200
+RX buffer:   2048 bytes
+Task stack:  8192 bytes
+Priority:    5
+```
+
+For custom UART settings:
+
+```c
+serial_ota_config_t config = SERIAL_OTA_DEFAULT_CONFIG();
+config.uart_port = UART_NUM_1;
+config.baud_rate = 921600;
+
+ESP_ERROR_CHECK(serial_ota_start_with_config(&config));
+```
+
+Every firmware that should remain updateable must include this component or an
+equivalent updater. If you OTA a plain blink app without the component, the app
+will run, but `espctl update` will no longer be available until you flash again
+with `idf.py`.
 
 ## Requirements
 
