@@ -1,15 +1,41 @@
-#include "serial_ota.h"
+#include "ota_link.h"
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 
-static const char *TAG = "esp32_serial_ota";
+static const char *TAG = "esp32_ota_link";
+
+static void app_health_task(void *arg)
+{
+    (void)arg;
+
+    vTaskDelay(pdMS_TO_TICKS(5000));
+
+#if CONFIG_ESP32_OTA_LINK_EXAMPLE_FORCE_INVALID
+    ESP_LOGW(TAG, "example health check failed; requesting rollback");
+    ESP_ERROR_CHECK(ota_link_mark_app_invalid_and_reboot());
+#else
+    esp_err_t err = ota_link_mark_app_valid();
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "OTA app confirmed valid");
+    } else if (err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "failed to confirm OTA app: %s", esp_err_to_name(err));
+    }
+
+    vTaskDelete(NULL);
+#endif
+}
 
 void app_main(void)
 {
-    ESP_ERROR_CHECK(serial_ota_start());
+    ota_link_config_t config = OTA_LINK_DEFAULT_CONFIG();
+    config.auto_mark_app_valid = false;
+    ESP_ERROR_CHECK(ota_link_start_with_config(&config));
     ESP_LOGI(TAG, "example app started");
+
+    xTaskCreate(app_health_task, "app_health", 3072, NULL, tskIDLE_PRIORITY + 1, NULL);
 
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(1000));

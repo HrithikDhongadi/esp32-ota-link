@@ -1,119 +1,77 @@
-# esp32-serial-ota
+# esp32-ota-link
 
-Binary serial device-management and OTA update tooling for ESP32-WROOM-32.
+Reusable ESP-IDF OTA link updater for ESP32-family projects.
 
-The project has two pieces:
+`esp32-ota-link` gives an ESP32 app a small binary command channel for device
+management and firmware updates over a byte-stream transport. The repo includes
+a reusable ESP-IDF component, an example firmware app, and a Python host tool
+that can push `.bin` images over USB serial/UART.
 
-- `firmware/`: ESP-IDF firmware for the ESP32.
-- `host/`: Python CLI that talks to the ESP32 over USB serial.
+The first transport is UART/USB serial, but the firmware component is structured
+so the same protocol can be adapted to RS485, TCP over WiFi, TCP over Ethernet,
+USB CDC, Bluetooth SPP, BLE, CAN/TWAI, or another transport with read/write
+callbacks.
 
-The current firmware supports a custom binary packet protocol with `PING`,
-`GET_INFO`, `REBOOT`, `OTA_BEGIN`, `OTA_DATA`, `OTA_END`, and `OTA_ABORT`.
-The OTA firmware side is packaged as a reusable ESP-IDF component.
+## Highlights
 
-## Current Status
+- Reusable ESP-IDF component: `firmware/components/ota_link`
+- Python host CLI: `python3 -m host.espctl`
+- Binary packet framing with CRC32
+- Commands: `ping`, `info`, `reboot`, `rollback`, `update`, `abort`
+- Chunked OTA transfer using ESP-IDF OTA APIs
+- Image SHA256 validation before boot partition switch
+- ESP-IDF rollback support for failed firmware
+- Manual or delayed app-valid confirmation
+- Dynamic OTA slot reporting, including 3-slot partition tables
+- Ready-made firmware profiles for ESP32, S2, S3, C3, C5, C6, H2, and P4
 
-Working on real hardware:
+## What You Can Use This For
 
-- ESP32-WROOM-32 target using ESP-IDF.
-- Binary packet framing over USB serial.
-- CRC32 packet validation.
-- Host-side streaming packet parser.
-- `ping` command.
-- `info` command.
-- `reboot` command.
-- `OTA_BEGIN` metadata handshake.
-- `OTA_DATA` staged firmware chunk transfer.
-- `OTA_END` image validation and boot-partition selection.
-- `OTA_ABORT` safe cancellation.
-- Persistent boot counter in NVS.
-- Interactive host shell that keeps the serial port open.
+Use this project when you want to update ESP32 firmware through a command
+protocol instead of reflashing with `idf.py flash` every time.
 
-Not implemented yet:
+Good fits:
 
-- automatic reboot/reconnect after update
-- OTA_DATA retry logic
-- Rollback handling
-- Firmware signing/security
+- development boards connected over USB serial
+- factory and service tools
+- RS485/UART service links
+- lab devices, test jigs, robots, motor controllers, and sensor nodes
+- products where WiFi OTA is not available yet
+- firmware demos that show OTA, rollback, and partition state
+- ESP-IDF apps that need a simple recovery/update channel
+
+The updater can install any valid ESP-IDF app image built for the same chip,
+flash layout, and hardware. To remain updateable after OTA, the new firmware
+must also include this component or an equivalent updater.
+
+This is not a secure production updater by itself yet. Add authentication,
+firmware signing, encryption, or a trusted transport before exposing it to
+untrusted users or physical ports.
 
 ## Project Layout
 
 ```text
 firmware/
   components/
-    serial_ota/        Reusable ESP-IDF serial OTA component
-  main/                Small example app using the component
-  partitions.csv       OTA-capable partition table
-  sdkconfig.defaults   Required default ESP-IDF settings
+    ota_link/        Reusable ESP-IDF OTA link component
+  main/                Example app using the component
+  profiles/            Optional chip/flash partition and sdkconfig profiles
+  partitions.csv       Default ESP32-WROOM-32 OTA partition table
+  sdkconfig.defaults   Default ESP-IDF settings
 host/                  Python host CLI and protocol implementation
 protocol/              Wire protocol documentation
 tests/                 Host-side protocol tests
-plan.md                Original full project roadmap
+plan.md                Original project roadmap
 ```
-
-## Reusing The Component
-
-Copy this directory into any ESP-IDF project:
-
-```text
-firmware/components/serial_ota
-```
-
-Then add the component to your app's `main/CMakeLists.txt`:
-
-```cmake
-idf_component_register(
-    SRCS "main.c"
-    INCLUDE_DIRS "."
-    REQUIRES serial_ota
-)
-```
-
-Start the updater from your app:
-
-```c
-#include "serial_ota.h"
-
-void app_main(void)
-{
-    ESP_ERROR_CHECK(serial_ota_start());
-
-    // Your blink, motor, sensor, or product logic can run here.
-}
-```
-
-By default, `serial_ota_start()` uses:
-
-```text
-UART:        UART_NUM_0
-Baud:        115200
-RX buffer:   2048 bytes
-Task stack:  8192 bytes
-Priority:    5
-```
-
-For custom UART settings:
-
-```c
-serial_ota_config_t config = SERIAL_OTA_DEFAULT_CONFIG();
-config.uart_port = UART_NUM_1;
-config.baud_rate = 921600;
-
-ESP_ERROR_CHECK(serial_ota_start_with_config(&config));
-```
-
-Every firmware that should remain updateable must include this component or an
-equivalent updater. If you OTA a plain blink app without the component, the app
-will run, but `espctl update` will no longer be available until you flash again
-with `idf.py`.
 
 ## Requirements
 
 Firmware:
 
 - ESP-IDF v6.1 or compatible
-- ESP32-WROOM-32 board
-- 4 MB flash configuration
+- ESP32-family target supported by ESP-IDF
+- OTA-capable partition table
+- flash-size setting that matches the actual module
 
 Host:
 
@@ -127,9 +85,9 @@ Install host dependencies:
 python3 -m pip install -r host/requirements.txt
 ```
 
-## Build And Flash
+## Quick Start
 
-From the firmware directory:
+Build and flash the default ESP32-WROOM-32 example:
 
 ```bash
 cd firmware
@@ -138,17 +96,25 @@ idf.py build
 idf.py -p /dev/ttyUSB0 flash
 ```
 
-If your board appears as `/dev/ttyACM0`, use that port instead.
+Open the host shell from the repository root:
 
-The project uses an OTA-capable partition table:
+```bash
+python3 -m host.espctl --port /dev/ttyUSB0 shell
+```
+
+Try the basic commands:
 
 ```text
-nvs
-otadata
-phy_init
-ota_0
-ota_1
+espctl> ping
+espctl> info
+espctl> update firmware/build/esp32_ota_link.bin
+espctl> reboot
 ```
+
+If your board appears as `/dev/ttyACM0`, use that port instead.
+
+Many ESP32 dev boards reset when the serial port opens. Shell mode keeps the
+port open, so repeated commands do not reset the board between requests.
 
 ## Host Commands
 
@@ -158,36 +124,257 @@ From the repository root:
 python3 -m host.espctl --port /dev/ttyUSB0 ping
 python3 -m host.espctl --port /dev/ttyUSB0 info
 python3 -m host.espctl --port /dev/ttyUSB0 reboot
-python3 -m host.espctl --port /dev/ttyUSB0 update firmware/build/esp32_serial_ota.bin
+python3 -m host.espctl --port /dev/ttyUSB0 rollback
+python3 -m host.espctl --port /dev/ttyUSB0 update firmware/build/esp32_ota_link.bin
 python3 -m host.espctl --port /dev/ttyUSB0 abort
-```
-
-Recommended during development:
-
-```bash
 python3 -m host.espctl --port /dev/ttyUSB0 shell
 ```
 
-Inside the shell:
+Inside `shell` mode:
 
 ```text
 espctl> ping
 espctl> info
 espctl> reboot
-espctl> update firmware/build/esp32_serial_ota.bin
+espctl> rollback
+espctl> update firmware/build/esp32_ota_link.bin
 espctl> abort
 espctl> quit
 ```
 
-Many ESP32 dev boards reset when the serial port opens. The shell mode keeps the
-port open, so repeated commands do not reset the board.
-
 The `update` command sends `OTA_BEGIN`, all `OTA_DATA` chunks, and `OTA_END`.
 After a successful update, run `reboot` to boot the finalized image.
 
-## Proven OTA Flow
+The `rollback` command marks the running app invalid and reboots into the
+previous valid OTA partition when ESP-IDF rollback is available.
 
-This has been tested on hardware:
+## Supported Firmware Profiles
+
+The default project files target the board this repo was developed on:
+ESP32-WROOM-32 with 4 MB flash and two OTA slots.
+
+Optional profiles live in `firmware/profiles/`:
+
+| Board / Module Family | Profile | Target | Flash | PSRAM | OTA Slots |
+| --- | --- | --- | --- | --- | --- |
+| ESP32 DevKitC / DevKitM / WROOM | `esp32_4mb_2ota` | `esp32` | 4 MB | none | 2 |
+| ESP32 DevKitC / DevKitM / WROOM | `esp32_8mb_2ota` | `esp32` | 8 MB | board-specific | 2 |
+| ESP32 DevKitC / DevKitM / WROVER | `esp32_wrover_4mb_2ota` | `esp32` | 4 MB | QSPI PSRAM | 2 |
+| ESP32-S2-DevKit / Saola / WROOM | `esp32s2_4mb_2ota` | `esp32s2` | 4 MB | none | 2 |
+| ESP32-S3-DevKitC / DevKitM / WROOM-1-N16R8 | `esp32s3_16mb_2ota` | `esp32s3` | 16 MB | 8 MB OPI | 2 |
+| ESP32-S3-DevKitC / DevKitM / WROOM-1-N16R8 | `esp32s3_16mb_3ota` | `esp32s3` | 16 MB | 8 MB OPI | 3 |
+| ESP32-C3-DevKitM-1 | `esp32c3_4mb_2ota` | `esp32c3` | 4 MB | none | 2 |
+| ESP32-C5 DevKit | `esp32c5_4mb_2ota` | `esp32c5` | 4 MB | none | 2 |
+| ESP32-C6-DevKitC | `esp32c6_4mb_2ota` | `esp32c6` | 4 MB | none | 2 |
+| ESP32-H2 DevKit | `esp32h2_4mb_2ota` | `esp32h2` | 4 MB | none | 2 |
+| ESP32-P4 DevKit / module | `esp32p4_16mb_2ota` | `esp32p4` | 16 MB | board-specific | 2 |
+
+Example profile build:
+
+```bash
+cd firmware
+idf.py \
+  -B build_esp32s3_16mb_3ota \
+  -D SDKCONFIG=build_esp32s3_16mb_3ota/sdkconfig \
+  -D SDKCONFIG_DEFAULTS="profiles/sdkconfig/common.defaults;profiles/sdkconfig/esp32s3_16mb_3ota.defaults" \
+  set-target esp32s3 build
+```
+
+See `firmware/profiles/README.md` for the full board matrix and build commands.
+You can copy any profile and adjust flash size, storage partitions, OTA slot
+count, or app slot size for your own board.
+
+## Reusing The Component
+
+Copy this directory into any ESP-IDF project:
+
+```text
+firmware/components/ota_link
+```
+
+Then add the component to your app's `main/CMakeLists.txt`:
+
+```cmake
+idf_component_register(
+    SRCS "main.c"
+    INCLUDE_DIRS "."
+    REQUIRES ota_link
+)
+```
+
+Start the updater from your app:
+
+```c
+#include "ota_link.h"
+
+void app_main(void)
+{
+    ESP_ERROR_CHECK(ota_link_start());
+
+    // Your blink, motor, sensor, or product logic can run here.
+}
+```
+
+By default, `ota_link_start()` uses:
+
+```text
+UART:        UART_NUM_0
+Baud:        115200
+RX buffer:   2048 bytes
+Task stack:  8192 bytes
+Priority:    5
+Rollback:    manual app confirmation
+```
+
+For custom UART settings:
+
+```c
+ota_link_config_t config = OTA_LINK_DEFAULT_CONFIG();
+config.uart_port = UART_NUM_1;
+config.baud_rate = 921600;
+config.auto_mark_app_valid = true;
+config.auto_mark_valid_delay_ms = 5000;
+
+ESP_ERROR_CHECK(ota_link_start_with_config(&config));
+```
+
+## Custom Transports
+
+The component exposes `ota_link_transport_t` for links other than UART:
+
+```c
+static int my_transport_read(void *context, uint8_t *buffer, size_t length, uint32_t timeout_ms)
+{
+    return my_link_read(context, buffer, length, timeout_ms);
+}
+
+static esp_err_t my_transport_write(void *context, const uint8_t *data, size_t length)
+{
+    return my_link_write(context, data, length);
+}
+
+static const ota_link_transport_t my_transport = {
+    .read = my_transport_read,
+    .write = my_transport_write,
+};
+
+void app_main(void)
+{
+    ota_link_config_t config = OTA_LINK_DEFAULT_CONFIG();
+    config.transport = &my_transport;
+    config.transport_context = my_link_handle;
+
+    ESP_ERROR_CHECK(ota_link_start_with_config(&config));
+}
+```
+
+For TCP over WiFi/Ethernet, the callbacks can wrap socket `recv()` and `send()`.
+For BLE or CAN/TWAI, add fragmentation below these callbacks because the
+default protocol payload can be up to 1024 bytes.
+
+## OTA And Rollback
+
+Every firmware that should remain updateable must include this component or an
+equivalent updater. If you OTA a plain blink app without the component, the app
+will run, but `espctl update` will no longer be available until you flash again
+with `idf.py`.
+
+The default partition table is OTA-capable:
+
+```text
+nvs
+otadata
+phy_init
+ota_0
+ota_1
+```
+
+`espctl info` discovers OTA app partitions dynamically. If your partition table
+has `ota_2` or more OTA slots, the host tool reports those slots automatically.
+
+By default, the reusable component does not confirm new OTA images. Call
+`ota_link_mark_app_valid()` only after your app confirms that critical startup
+work succeeded. If startup crashes or the app never marks itself valid, ESP-IDF
+can roll back to the previous valid OTA partition.
+
+In your own application, the pattern should look like this:
+
+```c
+#include "ota_link.h"
+
+static bool app_health_checks_passed(void)
+{
+    /*
+     * Replace these with checks that prove this firmware is actually usable:
+     * - required peripherals initialized
+     * - sensor/motor/display startup succeeded
+     * - saved configuration loaded
+     * - network or service task started if your product requires it
+     */
+    return true;
+}
+
+void app_main(void)
+{
+    ESP_ERROR_CHECK(ota_link_start());
+
+    if (app_health_checks_passed()) {
+        ESP_ERROR_CHECK(ota_link_mark_app_valid());
+    } else {
+        ESP_ERROR_CHECK(ota_link_mark_app_invalid_and_reboot());
+    }
+
+    /* Continue normal application work here. */
+}
+```
+
+Only call `ota_link_mark_app_valid()` when the new firmware is safe to keep.
+If checks fail, call `ota_link_mark_app_invalid_and_reboot()` to reject the
+running image and boot back into the previous valid OTA slot.
+
+To build an image that intentionally fails its example health check:
+
+```bash
+cd firmware
+idf.py -B build_invalid -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.invalid.defaults" build
+```
+
+After OTA and reboot, the invalid demo waits about 5 seconds, marks itself
+invalid, and ESP-IDF boots back into the previous valid partition. `info` then
+shows the failed slot as `INVALID` under `OTA slots:`.
+
+Keep the invalid demo in its own build directory. If
+`CONFIG_ESP32_OTA_LINK_EXAMPLE_FORCE_INVALID=y` is enabled in your normal
+`sdkconfig`, the normal `firmware/build/esp32_ota_link.bin` image will also
+mark itself invalid and roll back.
+
+## Example Info Output
+
+```text
+Project:           esp32_ota_link
+Firmware:          0.1.3
+Protocol:          1
+Chip:              ESP32
+ESP-IDF:           v6.1
+Running partition: ota_0
+Boot partition:    ota_0
+OTA state:         VALID
+OTA slots:
+  ota_0: VALID
+  ota_1: VALID
+Rollback possible: yes
+Free heap:         280800 bytes
+Boot count:        38
+Uptime:            23 seconds
+Build date:        Aug 30 2026
+```
+
+`Boot count` is stored in NVS and increments once per ESP32 boot. It is useful
+for confirming that `reboot` actually restarted the device.
+
+## Proven Hardware Flow
+
+This has been tested on real ESP32-WROOM-32 hardware:
 
 ```text
 Before update:
@@ -201,39 +388,17 @@ OTA data transferred
 OTA finalized
 
 After reboot:
-Firmware:          0.1.2
+Firmware:          0.1.3
 Running partition: ota_0
 ```
 
-## Example Info Output
+Rollback was also tested with an intentionally invalid firmware image:
 
 ```text
-Project:           esp32_serial_ota
-Firmware:          0.1.2
-Protocol:          1
-Chip:              ESP32
-ESP-IDF:           v6.1
-Running partition: ota_0
-Free heap:         298144 bytes
-Boot count:        8
-Uptime:            17 seconds
-Build date:        Aug 29 2026
+ota_0: INVALID
+ota_1: VALID
+Rollback possible: no
 ```
-
-`Boot count` is stored in NVS and increments once per ESP32 boot. It is useful
-for confirming that `reboot` actually restarted the device.
-
-## Test
-
-Run host-side protocol tests:
-
-```bash
-python3 -m pytest
-```
-
-These tests cover packet building, streaming parse behavior, fragmented packets,
-garbage before magic bytes, back-to-back packets, bad CRC rejection, and info
-payload parsing.
 
 ## Protocol
 
@@ -252,17 +417,21 @@ CRC32 u32
 All multi-byte fields are little-endian. See `protocol/protocol.md` for the
 full wire format.
 
-## Next Milestone
+## Test
 
-Automate update completion:
+Run host-side protocol tests:
 
-```text
-Host:
-- reboot after finalized update
-- wait for device reconnect
-- verify running partition and version
-
-ESP32:
-- mark new app valid after startup checks
-- support rollback for failed new firmware
+```bash
+python3 -m pytest
 ```
+
+These tests cover packet building, streaming parse behavior, fragmented packets,
+garbage before magic bytes, back-to-back packets, bad CRC rejection, and info
+payload parsing.
+
+## Roadmap
+
+- automatic reboot/reconnect after update
+- OTA_DATA retry logic
+- richer application health-check hooks
+- optional authentication and firmware signature verification

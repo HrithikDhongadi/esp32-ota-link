@@ -1,6 +1,6 @@
 idf_component_register(
     SRCS
-        "src/serial_ota.c"
+        "src/ota_link.c"
         "src/protocol.c"
         "src/commands.c"
         "src/device_info.c"

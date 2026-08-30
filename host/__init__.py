@@ -1,1 +1,1 @@
-"""Host tooling for the ESP32 serial OTA packet protocol."""
+"""Host tooling for the ESP32 OTA link packet protocol."""

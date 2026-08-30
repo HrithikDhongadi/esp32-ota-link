@@ -1,10 +1,12 @@
 #include "commands.h"
 
 #include "device_info.h"
+#include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ota_manager.h"
+#include "ota_link.h"
 
 static uint8_t s_info_payload[PROTOCOL_MAX_PAYLOAD];
 
@@ -38,6 +40,20 @@ void commands_handle_packet(const protocol_packet_t *packet)
         protocol_send_ack(packet->sequence);
         vTaskDelay(pdMS_TO_TICKS(100));
         esp_restart();
+        break;
+
+    case CMD_ROLLBACK:
+        if (ota_manager_is_active()) {
+            protocol_send_nack(packet->sequence, ERR_BUSY);
+            break;
+        }
+        if (!esp_ota_check_rollback_is_possible()) {
+            protocol_send_nack(packet->sequence, ERR_ROLLBACK_NOT_AVAILABLE);
+            break;
+        }
+        protocol_send_ack(packet->sequence);
+        vTaskDelay(pdMS_TO_TICKS(100));
+        ota_link_mark_app_invalid_and_reboot();
         break;
 
     case CMD_OTA_BEGIN: {

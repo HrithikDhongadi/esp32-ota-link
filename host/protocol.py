@@ -21,6 +21,7 @@ class Command(IntEnum):
     PING = 0x01
     GET_INFO = 0x02
     REBOOT = 0x03
+    ROLLBACK = 0x04
     OTA_BEGIN = 0x10
     OTA_DATA = 0x11
     OTA_END = 0x12
@@ -44,6 +45,7 @@ class ErrorCode(IntEnum):
     OTA_HASH_MISMATCH = 0x14
     OTA_INVALID_IMAGE = 0x15
     OTA_SIZE_ERROR = 0x16
+    ROLLBACK_NOT_AVAILABLE = 0x17
 
 
 @dataclass(frozen=True)
@@ -165,15 +167,47 @@ def parse_info_payload(payload: bytes) -> dict[str, object]:
     if len(payload) < 16:
         raise ProtocolError("info payload too short")
 
-    protocol_version, major, minor, patch, uptime, free_heap, boot_count = struct.unpack_from(
+    (
+        protocol_version,
+        major,
+        minor,
+        patch,
+        uptime,
+        free_heap,
+        boot_count,
+    ) = struct.unpack_from(
         "<BBBBIII", payload, 0
     )
-    offset = 16
-    chip_model, offset = read_u8_string(payload, offset)
-    running_partition, offset = read_u8_string(payload, offset)
-    idf_version, offset = read_u8_string(payload, offset)
-    project_name, offset = read_u8_string(payload, offset)
-    build_date, offset = read_u8_string(payload, offset)
+    try:
+        offset = 16
+        rollback_possible = bool(payload[offset])
+        offset += 1
+        chip_model, offset = read_u8_string(payload, offset)
+        running_partition, offset = read_u8_string(payload, offset)
+        boot_partition, offset = read_u8_string(payload, offset)
+        ota_state, offset = read_u8_string(payload, offset)
+        idf_version, offset = read_u8_string(payload, offset)
+        project_name, offset = read_u8_string(payload, offset)
+        build_date, offset = read_u8_string(payload, offset)
+        ota_slots = []
+        if offset < len(payload):
+            slot_count = payload[offset]
+            offset += 1
+            for _ in range(slot_count):
+                label, offset = read_u8_string(payload, offset)
+                state, offset = read_u8_string(payload, offset)
+                ota_slots.append({"label": label, "state": state})
+    except ProtocolError:
+        offset = 16
+        rollback_possible = False
+        chip_model, offset = read_u8_string(payload, offset)
+        running_partition, offset = read_u8_string(payload, offset)
+        boot_partition = running_partition
+        ota_state = "UNKNOWN"
+        idf_version, offset = read_u8_string(payload, offset)
+        project_name, offset = read_u8_string(payload, offset)
+        build_date, offset = read_u8_string(payload, offset)
+        ota_slots = []
 
     return {
         "protocol_version": protocol_version,
@@ -181,8 +215,12 @@ def parse_info_payload(payload: bytes) -> dict[str, object]:
         "uptime_seconds": uptime,
         "free_heap": free_heap,
         "boot_count": boot_count,
+        "rollback_possible": bool(rollback_possible),
         "chip_model": chip_model,
         "running_partition": running_partition,
+        "boot_partition": boot_partition,
+        "ota_state": ota_state,
+        "ota_slots": ota_slots,
         "idf_version": idf_version,
         "project_name": project_name,
         "build_date": build_date,

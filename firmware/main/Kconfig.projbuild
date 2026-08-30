@@ -1,0 +1,11 @@
+menu "esp32_ota_link example"
+
+config ESP32_OTA_LINK_EXAMPLE_FORCE_INVALID
+    bool "Force example app OTA validation failure"
+    default n
+    help
+        Enable this only for rollback testing. The example app will wait a few
+        seconds, mark itself invalid, and reboot into the previous valid OTA
+        partition.
+
+endmenu

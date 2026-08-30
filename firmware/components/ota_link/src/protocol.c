@@ -7,7 +7,16 @@
 #define CRC_SIZE 4
 
 static uart_port_t s_uart_port = UART_NUM_0;
+static esp_err_t (*s_write)(void *context, const uint8_t *data, size_t length);
+static void *s_write_context;
 static uint8_t s_tx_buffer[HEADER_SIZE + PROTOCOL_MAX_PAYLOAD + CRC_SIZE];
+
+static esp_err_t uart_transport_write(void *context, const uint8_t *data, size_t length)
+{
+    uart_port_t uart_port = (uart_port_t)(intptr_t)context;
+    int written = uart_write_bytes(uart_port, data, length);
+    return written == (int)length ? ESP_OK : ESP_FAIL;
+}
 
 static uint16_t read_le16(const uint8_t *data)
 {
@@ -100,6 +109,16 @@ bool protocol_parser_feed(protocol_parser_t *parser, uint8_t byte, protocol_pack
 void protocol_set_uart_port(uart_port_t uart_port)
 {
     s_uart_port = uart_port;
+    protocol_set_writer(uart_transport_write, (void *)(intptr_t)uart_port);
+}
+
+void protocol_set_writer(
+    esp_err_t (*write)(void *context, const uint8_t *data, size_t length),
+    void *context
+)
+{
+    s_write = write;
+    s_write_context = context;
 }
 
 void protocol_send_packet(uint8_t command, uint16_t sequence, const uint8_t *payload, uint16_t length)
@@ -116,7 +135,10 @@ void protocol_send_packet(uint8_t command, uint16_t sequence, const uint8_t *pay
 
     uint32_t crc = protocol_crc32(&s_tx_buffer[2], HEADER_SIZE - 2 + length);
     write_le32(&s_tx_buffer[HEADER_SIZE + length], crc);
-    uart_write_bytes(s_uart_port, s_tx_buffer, HEADER_SIZE + length + CRC_SIZE);
+    if (s_write == NULL) {
+        protocol_set_uart_port(s_uart_port);
+    }
+    (void)s_write(s_write_context, s_tx_buffer, HEADER_SIZE + length + CRC_SIZE);
 }
 
 void protocol_send_ack(uint16_t sequence)

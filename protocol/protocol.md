@@ -27,6 +27,7 @@ Maximum payload for version 1 is 1024 bytes.
 0x01 PING
 0x02 GET_INFO
 0x03 REBOOT
+0x04 ROLLBACK
 
 0x10 OTA_BEGIN
 0x11 OTA_DATA
@@ -64,12 +65,23 @@ firmware_patch: u8
 uptime_seconds: u32
 free_heap: u32
 boot_count: u32
+rollback_possible: u8
 chip_model: str8
 running_partition: str8
+boot_partition: str8
+ota_state: str8
 idf_version: str8
 project_name: str8
 build_date: str8
+ota_slot_count: u8
+ota_slot_label: str8
+ota_slot_state: str8
+...
 ```
+
+The OTA slot list is dynamic. Devices report every app partition whose subtype
+is in ESP-IDF's OTA range, so partition tables with `ota_0`, `ota_1`, `ota_2`,
+and additional OTA slots can be represented without changing the host protocol.
 
 `str8` means:
 
@@ -111,3 +123,11 @@ sets the new boot partition, and clears OTA state. It does not reboot by itself.
 No payload.
 
 `OTA_ABORT` cancels an active OTA session and keeps the current boot partition.
+
+## ROLLBACK Payload
+
+No payload.
+
+`ROLLBACK` marks the running app invalid and reboots into the previous valid OTA
+partition. The device rejects this command if an OTA session is active or if
+ESP-IDF reports that rollback is not available.
