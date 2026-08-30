@@ -12,10 +12,24 @@ so the same protocol can be adapted to RS485, TCP over WiFi, TCP over Ethernet,
 USB CDC, Bluetooth SPP, BLE, CAN/TWAI, or another transport with read/write
 callbacks.
 
+## Why This Exists
+
+Not every ESP32 is connected directly to the cloud.
+
+In robotics, lab hardware, industrial tools, and distributed embedded systems,
+ESP32 boards often sit behind an edge controller. They may control motors,
+sensors, actuators, grippers, lights, or small subsystems while a Raspberry Pi,
+Jetson, PLC, industrial PC, or master MCU coordinates the full machine.
+
+In that setup, the edge controller is the natural update authority. It already
+talks to each ESP32 node over UART, RS485, USB, Ethernet, CAN-style links, or a
+custom transport. `esp32-ota-link` is built for that topology: updating and
+managing ESP32 nodes through the communication link they already have.
+
 ## Highlights
 
 - Reusable ESP-IDF component: `firmware/components/ota_link`
-- Python host CLI: `python3 -m host.espctl`
+- Python host CLI: `python3 -m host.otalink`
 - Binary packet framing with CRC32
 - Commands: `ping`, `info`, `reboot`, `rollback`, `update`, `abort`
 - Chunked OTA transfer using ESP-IDF OTA APIs
@@ -53,7 +67,7 @@ untrusted users or physical ports.
 ```text
 firmware/
   components/
-    ota_link/        Reusable ESP-IDF OTA link component
+    ota_link/          Reusable ESP-IDF OTA link component
   main/                Example app using the component
   profiles/            Optional chip/flash partition and sdkconfig profiles
   partitions.csv       Default ESP32-WROOM-32 OTA partition table
@@ -99,16 +113,16 @@ idf.py -p /dev/ttyUSB0 flash
 Open the host shell from the repository root:
 
 ```bash
-python3 -m host.espctl --port /dev/ttyUSB0 shell
+python3 -m host.otalink --port /dev/ttyUSB0 shell
 ```
 
 Try the basic commands:
 
 ```text
-espctl> ping
-espctl> info
-espctl> update firmware/build/esp32_ota_link.bin
-espctl> reboot
+otalink> ping
+otalink> info
+otalink> update firmware/build/esp32_ota_link.bin
+otalink> reboot
 ```
 
 If your board appears as `/dev/ttyACM0`, use that port instead.
@@ -121,25 +135,25 @@ port open, so repeated commands do not reset the board between requests.
 From the repository root:
 
 ```bash
-python3 -m host.espctl --port /dev/ttyUSB0 ping
-python3 -m host.espctl --port /dev/ttyUSB0 info
-python3 -m host.espctl --port /dev/ttyUSB0 reboot
-python3 -m host.espctl --port /dev/ttyUSB0 rollback
-python3 -m host.espctl --port /dev/ttyUSB0 update firmware/build/esp32_ota_link.bin
-python3 -m host.espctl --port /dev/ttyUSB0 abort
-python3 -m host.espctl --port /dev/ttyUSB0 shell
+python3 -m host.otalink --port /dev/ttyUSB0 ping
+python3 -m host.otalink --port /dev/ttyUSB0 info
+python3 -m host.otalink --port /dev/ttyUSB0 reboot
+python3 -m host.otalink --port /dev/ttyUSB0 rollback
+python3 -m host.otalink --port /dev/ttyUSB0 update firmware/build/esp32_ota_link.bin
+python3 -m host.otalink --port /dev/ttyUSB0 abort
+python3 -m host.otalink --port /dev/ttyUSB0 shell
 ```
 
 Inside `shell` mode:
 
 ```text
-espctl> ping
-espctl> info
-espctl> reboot
-espctl> rollback
-espctl> update firmware/build/esp32_ota_link.bin
-espctl> abort
-espctl> quit
+otalink> ping
+otalink> info
+otalink> reboot
+otalink> rollback
+otalink> update firmware/build/esp32_ota_link.bin
+otalink> abort
+otalink> quit
 ```
 
 The `update` command sends `OTA_BEGIN`, all `OTA_DATA` chunks, and `OTA_END`.
@@ -276,7 +290,7 @@ default protocol payload can be up to 1024 bytes.
 
 Every firmware that should remain updateable must include this component or an
 equivalent updater. If you OTA a plain blink app without the component, the app
-will run, but `espctl update` will no longer be available until you flash again
+will run, but `otalink update` will no longer be available until you flash again
 with `idf.py`.
 
 The default partition table is OTA-capable:
@@ -289,7 +303,7 @@ ota_0
 ota_1
 ```
 
-`espctl info` discovers OTA app partitions dynamically. If your partition table
+`otalink info` discovers OTA app partitions dynamically. If your partition table
 has `ota_2` or more OTA slots, the host tool reports those slots automatically.
 
 By default, the reusable component does not confirm new OTA images. Call

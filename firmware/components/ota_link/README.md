@@ -24,6 +24,12 @@ TCP over WiFi, TCP over Ethernet, RS485, USB CDC, Bluetooth SPP, BLE, or
 CAN/TWAI. Small-packet transports need their own fragmentation layer or a
 smaller maximum payload size.
 
+This is especially useful when ESP32 nodes sit behind an edge controller. In
+robotics, lab hardware, and distributed embedded systems, the ESP32 may be a
+motor, sensor, actuator, or subsystem controller while a Raspberry Pi, Jetson,
+PLC, industrial PC, or master MCU manages the whole machine. In that topology,
+the master can update each ESP32 over the link that already connects them.
+
 ## Use
 
 Copy this directory into your ESP-IDF project:

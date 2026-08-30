@@ -65,7 +65,7 @@ class SerialTransport:
         self._serial.close()
 
 
-class EspCtlClient:
+class OtaLinkClient:
     def __init__(self, port: str, baud: int, timeout: float, retries: int) -> None:
         self._transport = SerialTransport(port, baud, timeout)
         self._timeout = timeout
@@ -100,8 +100,8 @@ class EspCtlClient:
         return self._sequence
 
 
-def open_client(args: argparse.Namespace) -> EspCtlClient:
-    return EspCtlClient(args.port, args.baud, args.timeout, args.retries)
+def open_client(args: argparse.Namespace) -> OtaLinkClient:
+    return OtaLinkClient(args.port, args.baud, args.timeout, args.retries)
 
 
 def ensure_ack(packet: Packet, context: str = "command") -> None:
@@ -119,7 +119,7 @@ def ensure_ack(packet: Packet, context: str = "command") -> None:
     raise SystemExit(f"Unexpected response command during {context}: 0x{packet.command:02X}")
 
 
-def run_ping(client: EspCtlClient, port: str) -> None:
+def run_ping(client: OtaLinkClient, port: str) -> None:
     try:
         packet = client.request(Command.PING)
     except TimeoutError as exc:
@@ -129,7 +129,7 @@ def run_ping(client: EspCtlClient, port: str) -> None:
     print("Device responded")
 
 
-def run_info(client: EspCtlClient, port: str, timeout: float) -> None:
+def run_info(client: OtaLinkClient, port: str, timeout: float) -> None:
     try:
         packet = client.request(Command.GET_INFO, timeout=max(timeout, 3.0))
     except TimeoutError as exc:
@@ -163,7 +163,7 @@ def run_info(client: EspCtlClient, port: str, timeout: float) -> None:
     print(f"Build date:        {info['build_date']}")
 
 
-def run_reboot(client: EspCtlClient, port: str) -> None:
+def run_reboot(client: OtaLinkClient, port: str) -> None:
     try:
         packet = client.request(Command.REBOOT)
     except TimeoutError as exc:
@@ -173,7 +173,7 @@ def run_reboot(client: EspCtlClient, port: str) -> None:
     print("Reboot requested")
 
 
-def run_rollback(client: EspCtlClient, port: str) -> None:
+def run_rollback(client: OtaLinkClient, port: str) -> None:
     try:
         packet = client.request(Command.ROLLBACK)
     except TimeoutError as exc:
@@ -200,7 +200,7 @@ def firmware_metadata(path: Path) -> tuple[int, bytes, bytes]:
     return size, digest.digest(), image_digest
 
 
-def run_update_begin(client: EspCtlClient, port: str, firmware_path: Path) -> None:
+def run_update_begin(client: OtaLinkClient, port: str, firmware_path: Path) -> None:
     if not firmware_path.is_file():
         raise SystemExit(f"Firmware file not found: {firmware_path}")
 
@@ -220,7 +220,7 @@ def run_update_begin(client: EspCtlClient, port: str, firmware_path: Path) -> No
     print("OTA begin accepted")
 
 
-def run_update_data(client: EspCtlClient, port: str, firmware_path: Path, size: int) -> None:
+def run_update_data(client: OtaLinkClient, port: str, firmware_path: Path, size: int) -> None:
     sent = 0
     chunk_number = 0
 
@@ -248,7 +248,7 @@ def run_update_data(client: EspCtlClient, port: str, firmware_path: Path, size: 
     print("OTA data transferred")
 
 
-def run_update_end(client: EspCtlClient, port: str) -> None:
+def run_update_end(client: OtaLinkClient, port: str) -> None:
     try:
         packet = client.request(Command.OTA_END, timeout=10.0)
     except TimeoutError as exc:
@@ -258,7 +258,7 @@ def run_update_end(client: EspCtlClient, port: str) -> None:
     print("OTA finalized")
 
 
-def run_abort(client: EspCtlClient, port: str) -> None:
+def run_abort(client: OtaLinkClient, port: str) -> None:
     try:
         packet = client.request(Command.OTA_ABORT)
     except TimeoutError as exc:
@@ -335,7 +335,7 @@ def cmd_shell(args: argparse.Namespace) -> int:
     try:
         while True:
             try:
-                line = input("espctl> ")
+                line = input("otalink> ")
             except EOFError:
                 print()
                 break
@@ -385,7 +385,7 @@ def cmd_shell(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="espctl")
+    parser = argparse.ArgumentParser(prog="otalink")
     parser.add_argument("--port", required=True, help="Serial device such as /dev/ttyUSB0")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--timeout", type=float, default=1.0)

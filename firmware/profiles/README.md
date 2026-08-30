@@ -159,5 +159,5 @@ idf.py \
 - Some ESP32-family boards ship with different flash sizes. Copy the closest
   profile and resize the OTA slots if your board is not the listed size.
 - You can copy and modify any profile for your own board.
-- `espctl info` discovers OTA app partitions dynamically, so additional OTA
+- `otalink info` discovers OTA app partitions dynamically, so additional OTA
   slots are reported automatically.
