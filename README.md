@@ -194,7 +194,23 @@ idf.py \
   set-target esp32s3 build
 ```
 
-See `firmware/profiles/README.md` for the full board matrix and build commands.
+When flashing a profile build, pass the same `-B` build directory:
+
+```bash
+idf.py -B build_esp32s3_16mb_3ota flash
+```
+
+Running plain `idf.py flash` uses the default `firmware/build` directory. If
+that directory was configured for another chip, ESP-IDF may rebuild or flash the
+wrong target.
+
+Use the firmware image from the same build directory for OTA updates:
+
+```text
+otalink> update firmware/build_esp32s3_16mb_3ota/esp32_ota_link.bin
+```
+
+See [Firmware Profiles Readme](firmware/profiles/README.md) for the full board matrix and build commands.
 You can copy any profile and adjust flash size, storage partitions, OTA slot
 count, or app slot size for your own board.
 
@@ -250,6 +266,21 @@ config.auto_mark_app_valid = true;
 config.auto_mark_valid_delay_ms = 5000;
 
 ESP_ERROR_CHECK(ota_link_start_with_config(&config));
+```
+## Current API Surface
+
+The firmware side already exposes a reusable ESP-IDF C API through
+`firmware/components/ota_link/include/ota_link.h`.
+
+The host side currently provides a Python CLI and reusable protocol/client
+building blocks, but it is not yet packaged as a full host SDK.
+
+```text
+MCU C API:       available
+Host Python CLI: available
+Host Python API: partial/internal
+Host C API:      planned
+Host C++ API:    planned
 ```
 
 ## Custom Transports
@@ -449,3 +480,6 @@ payload parsing.
 - OTA_DATA retry logic
 - richer application health-check hooks
 - optional authentication and firmware signature verification
+- full host Python API
+- full host C API
+- full host C++ API

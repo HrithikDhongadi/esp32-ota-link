@@ -32,6 +32,17 @@ default for ESP32-WROOM-32 with 4 MB flash.
 Use a separate build directory and sdkconfig file when switching chips. This
 keeps the repo's default `sdkconfig` untouched.
 
+Use the same `-B` build directory for every follow-up command for that profile.
+For example, after building with `-B build_esp32c3_4mb`, flash with:
+
+```bash
+idf.py -B build_esp32c3_4mb flash
+```
+
+Running plain `idf.py flash` uses the default `build/` directory, not the
+profile build directory. If `build/` was configured for another chip, ESP-IDF
+may rebuild or try to flash the wrong target.
+
 ESP32-WROOM-32, 4 MB flash:
 
 ```bash
