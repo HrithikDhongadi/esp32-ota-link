@@ -11,6 +11,25 @@
 
 static uint8_t s_info_payload[PROTOCOL_MAX_PAYLOAD];
 
+/**
+ * @brief Resend cached authenticated responses before command side effects.
+ *
+ * Mutating commands must call this before auth_unwrap_packet() and before
+ * touching OTA/reboot state. That ordering makes lost-ACK retries safe: an
+ * exact duplicate gets the cached response, while a sequence-number replay with
+ * different bytes is rejected without executing the command.
+ */
+static bool handle_authenticated_replay(const protocol_packet_t *packet)
+{
+    bool replayed = false;
+    protocol_error_t error = auth_check_replay(packet, &replayed);
+    if (error != ERR_OK) {
+        auth_send_nack(packet, error);
+        return true;
+    }
+    return replayed;
+}
+
 void commands_handle_packet(const protocol_packet_t *packet)
 {
     if (packet->version != PROTOCOL_VERSION) {
@@ -43,19 +62,22 @@ void commands_handle_packet(const protocol_packet_t *packet)
 
     case CMD_REBOOT:
         {
+        if (handle_authenticated_replay(packet)) {
+            break;
+        }
         const uint8_t *payload = NULL;
         uint16_t length = 0;
         protocol_error_t error = auth_unwrap_packet(packet, &payload, &length);
         (void)payload;
         if (error != ERR_OK || length != 0) {
-            protocol_send_nack(packet->sequence, error != ERR_OK ? error : ERR_INVALID_LENGTH);
+            auth_send_nack(packet, error != ERR_OK ? error : ERR_INVALID_LENGTH);
             break;
         }
         if (ota_manager_is_active()) {
-            protocol_send_nack(packet->sequence, ERR_BUSY);
+            auth_send_nack(packet, ERR_BUSY);
             break;
         }
-        protocol_send_ack(packet->sequence);
+        auth_send_ack(packet);
         vTaskDelay(pdMS_TO_TICKS(100));
         esp_restart();
         break;
@@ -63,29 +85,35 @@ void commands_handle_packet(const protocol_packet_t *packet)
 
     case CMD_ROLLBACK:
         {
+        if (handle_authenticated_replay(packet)) {
+            break;
+        }
         const uint8_t *payload = NULL;
         uint16_t length = 0;
         protocol_error_t error = auth_unwrap_packet(packet, &payload, &length);
         (void)payload;
         if (error != ERR_OK || length != 0) {
-            protocol_send_nack(packet->sequence, error != ERR_OK ? error : ERR_INVALID_LENGTH);
+            auth_send_nack(packet, error != ERR_OK ? error : ERR_INVALID_LENGTH);
             break;
         }
         if (ota_manager_is_active()) {
-            protocol_send_nack(packet->sequence, ERR_BUSY);
+            auth_send_nack(packet, ERR_BUSY);
             break;
         }
         if (!esp_ota_check_rollback_is_possible()) {
-            protocol_send_nack(packet->sequence, ERR_ROLLBACK_NOT_AVAILABLE);
+            auth_send_nack(packet, ERR_ROLLBACK_NOT_AVAILABLE);
             break;
         }
-        protocol_send_ack(packet->sequence);
+        auth_send_ack(packet);
         vTaskDelay(pdMS_TO_TICKS(100));
         ota_link_mark_app_invalid_and_reboot();
         break;
         }
 
     case CMD_OTA_BEGIN: {
+        if (handle_authenticated_replay(packet)) {
+            break;
+        }
         const uint8_t *payload = NULL;
         uint16_t length = 0;
         protocol_error_t error = auth_unwrap_packet(packet, &payload, &length);
@@ -93,14 +121,17 @@ void commands_handle_packet(const protocol_packet_t *packet)
             error = ota_manager_begin(payload, length);
         }
         if (error == ERR_OK) {
-            protocol_send_ack(packet->sequence);
+            auth_send_ack(packet);
         } else {
-            protocol_send_nack(packet->sequence, error);
+            auth_send_nack(packet, error);
         }
         break;
     }
 
     case CMD_OTA_ABORT: {
+        if (handle_authenticated_replay(packet)) {
+            break;
+        }
         const uint8_t *payload = NULL;
         uint16_t length = 0;
         protocol_error_t error = auth_unwrap_packet(packet, &payload, &length);
@@ -112,14 +143,17 @@ void commands_handle_packet(const protocol_packet_t *packet)
             error = ota_manager_abort();
         }
         if (error == ERR_OK) {
-            protocol_send_ack(packet->sequence);
+            auth_send_ack(packet);
         } else {
-            protocol_send_nack(packet->sequence, error);
+            auth_send_nack(packet, error);
         }
         break;
     }
 
     case CMD_OTA_DATA: {
+        if (handle_authenticated_replay(packet)) {
+            break;
+        }
         const uint8_t *payload = NULL;
         uint16_t length = 0;
         protocol_error_t error = auth_unwrap_packet(packet, &payload, &length);
@@ -127,14 +161,17 @@ void commands_handle_packet(const protocol_packet_t *packet)
             error = ota_manager_write_data(payload, length);
         }
         if (error == ERR_OK) {
-            protocol_send_ack(packet->sequence);
+            auth_send_ack(packet);
         } else {
-            protocol_send_nack(packet->sequence, error);
+            auth_send_nack(packet, error);
         }
         break;
     }
 
     case CMD_OTA_END: {
+        if (handle_authenticated_replay(packet)) {
+            break;
+        }
         const uint8_t *payload = NULL;
         uint16_t length = 0;
         protocol_error_t error = auth_unwrap_packet(packet, &payload, &length);
@@ -146,9 +183,9 @@ void commands_handle_packet(const protocol_packet_t *packet)
             error = ota_manager_end();
         }
         if (error == ERR_OK) {
-            protocol_send_ack(packet->sequence);
+            auth_send_ack(packet);
         } else {
-            protocol_send_nack(packet->sequence, error);
+            auth_send_nack(packet, error);
         }
         break;
     }

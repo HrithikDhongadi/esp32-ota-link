@@ -6,6 +6,8 @@ import pytest
 
 from host.otalink import (
     AUTH_PROOF_PREFIX,
+    AUTH_DEVICE_PROOF_PREFIX,
+    AUTH_RESPONSE_PREFIX,
     AUTH_SESSION_PREFIX,
     OtaLinkClient,
     firmware_metadata,
@@ -62,7 +64,12 @@ class AuthTransport:
                 AUTH_SESSION_PREFIX + self.client_nonce + self.server_nonce,
                 hashlib.sha256,
             ).digest()
-            return Packet(Command.ACK, sequence, bytes([ErrorCode.OK]) + self.server_nonce)
+            proof = hmac.new(
+                self.key,
+                AUTH_DEVICE_PROOF_PREFIX + self.client_nonce + self.server_nonce,
+                hashlib.sha256,
+            ).digest()[:AUTH_TAG_SIZE]
+            return Packet(Command.ACK, sequence, bytes([ErrorCode.OK]) + self.server_nonce + proof)
 
         if request.command == Command.AUTH and len(request.payload) == AUTH_NONCE_SIZE + AUTH_TAG_SIZE:
             proof = hmac.new(
@@ -83,10 +90,82 @@ class AuthTransport:
             hashlib.sha256,
         ).digest()[:AUTH_TAG_SIZE]
         assert tag == expected
-        return Packet(Command.ACK, sequence, bytes([ErrorCode.OK]))
+        return self._signed_response(request.command, Command.ACK, sequence, bytes([ErrorCode.OK]))
 
     def close(self) -> None:
         pass
+
+    def _signed_response(
+        self,
+        request_command: Command,
+        response_command: Command,
+        sequence: int,
+        payload: bytes,
+    ) -> Packet:
+        tag = hmac.new(
+            self.session_key,
+            AUTH_RESPONSE_PREFIX +
+            bytes([request_command]) +
+            bytes([response_command]) +
+            sequence.to_bytes(2, "little") +
+            payload,
+            hashlib.sha256,
+        ).digest()[:AUTH_TAG_SIZE]
+        return Packet(response_command, sequence, payload + tag)
+
+
+class ResetAuthTransport(AuthTransport):
+    def __init__(self, key: bytes) -> None:
+        super().__init__(key)
+        self.rejected_once = False
+        self.auth_challenges = 0
+
+    def request(self, packet: bytes, sequence: int, timeout: float) -> Packet:
+        parsed = self.parser.feed(packet)
+        assert len(parsed) == 1
+        request = parsed[0]
+
+        if request.command == Command.AUTH and len(request.payload) == AUTH_NONCE_SIZE:
+            self.auth_challenges += 1
+            self.client_nonce = request.payload
+            self.session_key = hmac.new(
+                self.key,
+                AUTH_SESSION_PREFIX + self.client_nonce + self.server_nonce,
+                hashlib.sha256,
+            ).digest()
+            proof = hmac.new(
+                self.key,
+                AUTH_DEVICE_PROOF_PREFIX + self.client_nonce + self.server_nonce,
+                hashlib.sha256,
+            ).digest()[:AUTH_TAG_SIZE]
+            return Packet(Command.ACK, sequence, bytes([ErrorCode.OK]) + self.server_nonce + proof)
+
+        if request.command == Command.AUTH and len(request.payload) == AUTH_NONCE_SIZE + AUTH_TAG_SIZE:
+            return Packet(Command.ACK, sequence, bytes([ErrorCode.OK]))
+
+        if not self.rejected_once:
+            self.rejected_once = True
+            return Packet(Command.NACK, sequence, bytes([ErrorCode.AUTH_REQUIRED]))
+
+        self.protected_request = request
+        return self._signed_response(request.command, Command.ACK, sequence, bytes([ErrorCode.OK]))
+
+
+class FakeDeviceTransport(AuthTransport):
+    def __init__(self, key: bytes) -> None:
+        super().__init__(key)
+
+    def request(self, packet: bytes, sequence: int, timeout: float) -> Packet:
+        parsed = self.parser.feed(packet)
+        assert len(parsed) == 1
+        request = parsed[0]
+        if request.command == Command.AUTH and len(request.payload) == AUTH_NONCE_SIZE:
+            return Packet(
+                Command.ACK,
+                sequence,
+                bytes([ErrorCode.OK]) + self.server_nonce + (b"\x00" * AUTH_TAG_SIZE),
+            )
+        return Packet(Command.ACK, sequence, bytes([ErrorCode.OK]))
 
 
 def test_client_retries_same_payload_after_timeout():
@@ -107,7 +186,7 @@ def test_client_retries_same_payload_after_timeout():
     second = transport.requests[1][0]
     assert first.command == Command.OTA_DATA
     assert second.command == Command.OTA_DATA
-    assert first.sequence != second.sequence
+    assert first.sequence == second.sequence
     assert first.payload == second.payload == payload
 
 
@@ -128,6 +207,60 @@ def test_authenticated_client_challenges_and_tags_protected_command():
     assert packet.command == Command.ACK
     assert transport.protected_request is not None
     assert len(transport.protected_request.payload) == AUTH_TAG_SIZE
+
+
+def test_authenticated_client_reauthenticates_after_device_reset():
+    key = b"test secret"
+    transport = ResetAuthTransport(key)
+    client = OtaLinkClient(
+        port="unused",
+        baud=115200,
+        timeout=1.0,
+        retries=2,
+        transport=transport,
+        auth_key=key,
+    )
+
+    packet = client.request(Command.REBOOT)
+
+    assert packet.command == Command.ACK
+    assert transport.auth_challenges == 2
+
+
+def test_authenticated_client_rejects_fake_device_proof():
+    key = b"test secret"
+    transport = FakeDeviceTransport(key)
+    client = OtaLinkClient(
+        port="unused",
+        baud=115200,
+        timeout=1.0,
+        retries=1,
+        transport=transport,
+        auth_key=key,
+    )
+
+    with pytest.raises(SystemExit, match="invalid device proof"):
+        client.request(Command.REBOOT)
+
+
+def test_authenticated_client_rejects_unsigned_protected_response():
+    key = b"test secret"
+    transport = AuthTransport(key)
+    original_signed_response = transport._signed_response
+    transport._signed_response = lambda *_args: Packet(Command.ACK, _args[2], bytes([ErrorCode.OK]))  # type: ignore[method-assign]
+    client = OtaLinkClient(
+        port="unused",
+        baud=115200,
+        timeout=1.0,
+        retries=1,
+        transport=transport,
+        auth_key=key,
+    )
+
+    with pytest.raises(SystemExit, match="missing its tag"):
+        client.request(Command.REBOOT)
+
+    transport._signed_response = original_signed_response  # type: ignore[method-assign]
 
 
 def test_authenticated_client_uses_smaller_ota_chunks():

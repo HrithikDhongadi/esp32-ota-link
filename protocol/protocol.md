@@ -70,9 +70,15 @@ Authentication uses a pre-shared key and HMAC-SHA256:
 
 ```text
 Host -> device AUTH: client_nonce: 16 bytes
-Device -> host ACK:  status: u8, server_nonce: 16 bytes
+Device -> host ACK:  status: u8, server_nonce: 16 bytes, device_proof_tag: 16 bytes
 Host -> device AUTH: client_nonce: 16 bytes, proof_tag: 16 bytes
 Device -> host ACK:  status: u8
+```
+
+The device proof tag is the first 16 bytes of:
+
+```text
+HMAC-SHA256(auth_key, "device-proof" || client_nonce || server_nonce)
 ```
 
 The proof tag is the first 16 bytes of:
@@ -94,6 +100,17 @@ payload:
 payload: original_payload || auth_tag
 auth_tag: first 16 bytes of HMAC-SHA256(session_key, command || sequence || original_payload)
 ```
+
+Responses to authenticated protected commands append a 16-byte response tag:
+
+```text
+response_payload: original_response_payload || response_tag
+response_tag: first 16 bytes of HMAC-SHA256(session_key, "response" || request_command || response_command || sequence || original_response_payload)
+```
+
+The device tracks recent authenticated request sequence numbers. An exact
+duplicate request returns the cached response without re-executing the command;
+a reused sequence with different bytes is rejected.
 
 `sequence` is encoded little-endian. Because the tag consumes 16 payload bytes,
 authenticated `OTA_DATA` chunks carry up to 1000 firmware bytes.

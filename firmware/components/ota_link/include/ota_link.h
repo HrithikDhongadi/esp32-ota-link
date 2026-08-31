@@ -65,8 +65,11 @@ typedef struct {
      * @brief Optional pre-shared key for HMAC-SHA256 command authentication.
      *
      * When require_authentication is true, reboot, rollback, OTA update, and
-     * abort commands require the host to authenticate with this key first.
-     * The key is copied during startup and may be released after the call.
+     * abort commands require the host to authenticate with this key first. The
+     * device also proves possession of the key during the handshake and signs
+     * protected-command responses so the host can reject forged ACK/NACK
+     * packets. The key is copied during startup and may be released after the
+     * call.
      */
     const uint8_t *auth_key;
     size_t auth_key_len;

@@ -154,6 +154,10 @@ python3 -m host.otalink --port /dev/ttyUSB0 --auth-key 'service-secret' info
 python3 -m host.otalink --port /dev/ttyUSB0 --auth-key hex:736572766963652d736563726574 reboot
 ```
 
+For production key generation, firmware configuration, host usage, replay
+behavior, and the difference between link authentication and firmware signing,
+see [Production authentication guide](docs/production-authentication.md).
+
 Inside `shell` mode:
 
 ```text
@@ -332,6 +336,8 @@ idf.py -B build_esp32c3_4mb_2ota menuconfig
 
 Then enable `esp32_ota_link example -> Require OTA link authentication in the
 example app`, set the demo key, rebuild, and use the host with `--auth-key`.
+For production usage, see
+[Production authentication guide](docs/production-authentication.md).
 
 ## Current API Surface
 
@@ -591,6 +597,8 @@ Completed:
 - configurable UART TX/RX/RTS/CTS pins
 - UART0 console-log risk documented and warned at runtime
 - optional HMAC-SHA256 link authentication
+- authenticated device proof and protected-command responses
+- authenticated replay protection with cached responses for safe retries
 - host tests for protocol, retry, auth, and metadata
 - ESP32-C3 hardware tests for ping, info, interrupted OTA abort, full OTA,
   reboot, and validation
@@ -600,7 +608,7 @@ Remaining:
 
 - automatic reboot/reconnect after update
 - firmware-side command unit tests
-- power-failure recovery tests
+- automated power-failure recovery tests
 - richer application health-check hooks
 - firmware signature verification
 - full host Python API

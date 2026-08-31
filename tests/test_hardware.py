@@ -9,7 +9,6 @@ import pytest
 from host.otalink import OtaLinkClient, ensure_ack, firmware_metadata, parse_auth_key
 from host.protocol import (
     Command,
-    OTA_CHUNK_DATA_SIZE,
     build_ota_begin_payload,
     build_ota_data_payload,
 )
@@ -90,7 +89,7 @@ def test_hardware_interrupted_update_can_abort():
         ensure_ack(begin, "OTA_BEGIN")
 
         with Path(firmware).open("rb") as image:
-            chunk = image.read(OTA_CHUNK_DATA_SIZE)
+            chunk = image.read(client.max_ota_chunk_data_size())
         data = client.request(
             Command.OTA_DATA,
             build_ota_data_payload(0, 0, chunk),

@@ -27,7 +27,9 @@ from .protocol import (
 
 SERIAL_READ_TIMEOUT = 0.02
 AUTH_PROOF_PREFIX = b"auth-proof"
+AUTH_DEVICE_PROOF_PREFIX = b"device-proof"
 AUTH_SESSION_PREFIX = b"session"
+AUTH_RESPONSE_PREFIX = b"response"
 PROTECTED_COMMANDS = {
     Command.REBOOT,
     Command.ROLLBACK,
@@ -110,20 +112,33 @@ class OtaLinkClient:
         if self._auth_key is not None and command in PROTECTED_COMMANDS:
             self.authenticate()
 
-        for attempt in range(1, self._retries + 1):
+        auth_retried = False
+        while True:
             sequence = self._next_sequence()
             packet_payload = self._authenticated_payload(command, sequence, payload)
             try:
-                return self._transport.request(
+                packet = self._request_packet(
                     build_packet(command, sequence, packet_payload),
                     sequence,
                     timeout or self._timeout,
                 )
+                if (
+                    self._auth_key is not None and
+                    command in PROTECTED_COMMANDS and
+                    self._is_auth_required(packet) and
+                    not auth_retried
+                ):
+                    auth_retried = True
+                    self._clear_authentication()
+                    self.authenticate()
+                    continue
+                if self._auth_key is not None and command in PROTECTED_COMMANDS:
+                    packet = self._verified_response(command, sequence, packet)
+                if command in {Command.REBOOT, Command.ROLLBACK} and packet.command == Command.ACK:
+                    self._clear_authentication()
+                return packet
             except TimeoutError:
-                if attempt == self._retries:
-                    raise
-
-        raise TimeoutError("timed out waiting for response")
+                raise
 
     def authenticate(self) -> None:
         if self._auth_key is None or self._authenticated:
@@ -131,11 +146,19 @@ class OtaLinkClient:
 
         client_nonce = os.urandom(AUTH_NONCE_SIZE)
         challenge = self._request_unprotected(Command.AUTH, client_nonce, timeout=max(self._timeout, 3.0))
-        if challenge.command != Command.ACK or len(challenge.payload) != 1 + AUTH_NONCE_SIZE:
+        if challenge.command != Command.ACK or len(challenge.payload) != 1 + AUTH_NONCE_SIZE + AUTH_TAG_SIZE:
             raise SystemExit("Authentication challenge failed")
         ensure_ack(challenge, "AUTH challenge")
 
-        server_nonce = challenge.payload[1:]
+        server_nonce = challenge.payload[1:1 + AUTH_NONCE_SIZE]
+        device_proof = challenge.payload[1 + AUTH_NONCE_SIZE:]
+        expected_device_proof = hmac.new(
+            self._auth_key,
+            AUTH_DEVICE_PROOF_PREFIX + client_nonce + server_nonce,
+            hashlib.sha256,
+        ).digest()[:AUTH_TAG_SIZE]
+        if not hmac.compare_digest(device_proof, expected_device_proof):
+            raise SystemExit("Authentication challenge failed: invalid device proof")
         self._session_key = hmac.new(
             self._auth_key,
             AUTH_SESSION_PREFIX + client_nonce + server_nonce,
@@ -163,14 +186,17 @@ class OtaLinkClient:
         payload: bytes = b"",
         timeout: float | None = None,
     ) -> Packet:
+        sequence = self._next_sequence()
+        return self._request_packet(
+            build_packet(command, sequence, payload),
+            sequence,
+            timeout or self._timeout,
+        )
+
+    def _request_packet(self, packet: bytes, sequence: int, timeout: float) -> Packet:
         for attempt in range(1, self._retries + 1):
-            sequence = self._next_sequence()
             try:
-                return self._transport.request(
-                    build_packet(command, sequence, payload),
-                    sequence,
-                    timeout or self._timeout,
-                )
+                return self._transport.request(packet, sequence, timeout)
             except TimeoutError:
                 if attempt == self._retries:
                     raise
@@ -190,6 +216,40 @@ class OtaLinkClient:
             hashlib.sha256,
         ).digest()[:AUTH_TAG_SIZE]
         return payload + tag
+
+    def _clear_authentication(self) -> None:
+        self._session_key = None
+        self._authenticated = False
+
+    def _verified_response(self, request_command: Command, sequence: int, packet: Packet) -> Packet:
+        if self._session_key is None:
+            raise SystemExit("Authentication session is not established")
+        if len(packet.payload) < AUTH_TAG_SIZE:
+            raise SystemExit("Authenticated response is missing its tag")
+
+        payload = packet.payload[:-AUTH_TAG_SIZE]
+        tag = packet.payload[-AUTH_TAG_SIZE:]
+        expected = hmac.new(
+            self._session_key,
+            AUTH_RESPONSE_PREFIX +
+            bytes([request_command]) +
+            bytes([packet.command]) +
+            sequence.to_bytes(2, "little") +
+            payload,
+            hashlib.sha256,
+        ).digest()[:AUTH_TAG_SIZE]
+        if not hmac.compare_digest(tag, expected):
+            raise SystemExit("Authenticated response tag verification failed")
+
+        return Packet(packet.command, packet.sequence, payload, packet.version)
+
+    @staticmethod
+    def _is_auth_required(packet: Packet) -> bool:
+        return (
+            packet.command == Command.NACK and
+            len(packet.payload) > 0 and
+            packet.payload[0] == ErrorCode.AUTH_REQUIRED
+        )
 
     def _next_sequence(self) -> int:
         self._sequence = (self._sequence + 1) & 0xFFFF

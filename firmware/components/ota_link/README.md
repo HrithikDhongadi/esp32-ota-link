@@ -124,6 +124,16 @@ ESP_ERROR_CHECK(ota_link_start_with_config(&config));
 
 The host must pass the same key with `--auth-key`.
 
+The authentication handshake includes a device proof so the host can reject a
+fake device that does not know the key. Responses to protected commands are
+also authenticated. Recent authenticated requests are replay-tracked; exact
+duplicates return the cached response without running the command a second
+time, while reused sequence numbers with different payloads are rejected.
+
+For production key generation, host usage, replay behavior, and how link
+authentication fits with secure boot/signed firmware, see the top-level
+`docs/production-authentication.md` guide.
+
 ## Custom Transport
 
 The built-in transport is UART. To adapt the component to another link, provide
