@@ -9,11 +9,15 @@
 
 #define OTA_BEGIN_PAYLOAD_SIZE (4 + OTA_SHA256_SIZE)
 #define OTA_DATA_HEADER_SIZE 8
+#define OTA_MAX_CHUNK_DATA_SIZE 1016
 
 typedef struct {
     bool active;
     uint32_t firmware_size;
     uint32_t bytes_received;
+    uint32_t last_chunk_offset;
+    uint16_t last_chunk_length;
+    uint8_t last_chunk_data[OTA_MAX_CHUNK_DATA_SIZE];
     uint8_t expected_sha256[OTA_SHA256_SIZE];
     esp_ota_handle_t handle;
     const esp_partition_t *partition;
@@ -104,7 +108,19 @@ protocol_error_t ota_manager_write_data(const uint8_t *payload, uint16_t length)
     const uint8_t *data = &payload[OTA_DATA_HEADER_SIZE];
     uint16_t data_length = length - OTA_DATA_HEADER_SIZE;
 
+    if (data_length > OTA_MAX_CHUNK_DATA_SIZE) {
+        return ERR_INVALID_LENGTH;
+    }
     if (offset != s_ota.bytes_received) {
+        if (offset == s_ota.last_chunk_offset &&
+            data_length == s_ota.last_chunk_length &&
+            offset + data_length == s_ota.bytes_received &&
+            memcmp(data, s_ota.last_chunk_data, data_length) == 0) {
+            ESP_LOGI(TAG, "duplicate OTA data acknowledged: chunk=%" PRIu32
+                     " offset=%" PRIu32,
+                     chunk_number, offset);
+            return ERR_OK;
+        }
         ESP_LOGW(TAG, "invalid OTA offset: got=%" PRIu32 " expected=%" PRIu32,
                  offset, s_ota.bytes_received);
         return ERR_OTA_INVALID_OFFSET;
@@ -122,6 +138,9 @@ protocol_error_t ota_manager_write_data(const uint8_t *payload, uint16_t length)
         return ERR_OTA_FLASH_ERROR;
     }
 
+    s_ota.last_chunk_offset = offset;
+    s_ota.last_chunk_length = data_length;
+    memcpy(s_ota.last_chunk_data, data, data_length);
     s_ota.bytes_received += data_length;
     if ((chunk_number % 64) == 0 || s_ota.bytes_received == s_ota.firmware_size) {
         ESP_LOGI(TAG, "OTA data: chunk=%" PRIu32 " received=%" PRIu32 "/%" PRIu32,

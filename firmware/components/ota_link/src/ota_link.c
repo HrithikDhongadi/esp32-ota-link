@@ -1,5 +1,6 @@
 #include "ota_link.h"
 
+#include "auth.h"
 #include "commands.h"
 #include "device_info.h"
 #include "esp_log.h"
@@ -112,6 +113,11 @@ esp_err_t ota_link_start_with_config(const ota_link_config_t *config)
     }
 
     s_config = *config;
+    if (s_config.require_authentication &&
+        (s_config.auth_key == NULL || s_config.auth_key_len == 0 || s_config.auth_key_len > AUTH_KEY_MAX_SIZE)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    auth_configure(s_config.auth_key, s_config.auth_key_len, s_config.require_authentication);
     device_info_init();
 
     if (s_config.transport == NULL) {
@@ -142,9 +148,24 @@ esp_err_t ota_link_start_with_config(const ota_link_config_t *config)
             return err;
         }
 
+        err = uart_set_pin(
+            s_config.uart_port,
+            s_config.tx_io_num,
+            s_config.rx_io_num,
+            s_config.rts_io_num,
+            s_config.cts_io_num
+        );
+        if (err != ESP_OK) {
+            uart_driver_delete(s_config.uart_port);
+            return err;
+        }
+
         s_config.transport = &s_uart_transport;
         s_config.transport_context = (void *)(intptr_t)s_config.uart_port;
         ESP_LOGI(TAG, "using UART%d at %d baud", s_config.uart_port, s_config.baud_rate);
+        if (s_config.uart_port == UART_NUM_0) {
+            ESP_LOGW(TAG, "UART0 often carries ESP-IDF console logs; use a dedicated UART or custom transport for production");
+        }
     } else if (s_config.transport->read == NULL || s_config.transport->write == NULL) {
         return ESP_ERR_INVALID_ARG;
     }

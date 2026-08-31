@@ -31,6 +31,7 @@ managing ESP32 nodes through the communication link they already have.
 - Reusable ESP-IDF component: `firmware/components/ota_link`
 - Python host CLI: `python3 -m host.otalink`
 - Binary packet framing with CRC32
+- Optional HMAC-SHA256 link authentication for mutating commands
 - Commands: `ping`, `info`, `reboot`, `rollback`, `update`, `abort`
 - Chunked OTA transfer using ESP-IDF OTA APIs
 - Image SHA256 validation before boot partition switch
@@ -58,9 +59,8 @@ The updater can install any valid ESP-IDF app image built for the same chip,
 flash layout, and hardware. To remain updateable after OTA, the new firmware
 must also include this component or an equivalent updater.
 
-This is not a secure production updater by itself yet. Add authentication,
-firmware signing, encryption, or a trusted transport before exposing it to
-untrusted users or physical ports.
+Use link authentication, firmware signing, encryption, or a trusted transport
+before exposing update ports to untrusted users or physical access.
 
 ## Project Layout
 
@@ -128,7 +128,9 @@ otalink> reboot
 If your board appears as `/dev/ttyACM0`, use that port instead.
 
 Many ESP32 dev boards reset when the serial port opens. Shell mode keeps the
-port open, so repeated commands do not reset the board between requests.
+port open, so repeated commands do not reset the board between requests. This
+matters after OTA: a newly booted image may spend a few seconds in
+`PENDING_VERIFY` before the application marks itself valid.
 
 ## Host Commands
 
@@ -142,6 +144,14 @@ python3 -m host.otalink --port /dev/ttyUSB0 rollback
 python3 -m host.otalink --port /dev/ttyUSB0 update firmware/build/esp32_ota_link.bin
 python3 -m host.otalink --port /dev/ttyUSB0 abort
 python3 -m host.otalink --port /dev/ttyUSB0 shell
+```
+
+If the device requires link authentication, pass the same pre-shared key to the
+host tool. Text keys and `hex:` encoded keys are accepted:
+
+```bash
+python3 -m host.otalink --port /dev/ttyUSB0 --auth-key 'service-secret' info
+python3 -m host.otalink --port /dev/ttyUSB0 --auth-key hex:736572766963652d736563726574 reboot
 ```
 
 Inside `shell` mode:
@@ -158,6 +168,28 @@ otalink> quit
 
 The `update` command sends `OTA_BEGIN`, all `OTA_DATA` chunks, and `OTA_END`.
 After a successful update, run `reboot` to boot the finalized image.
+
+In single-command terminal mode, wait before reopening the serial port for
+`info`, because opening USB serial may reset some ESP32 dev boards:
+
+```bash
+python3 -m host.otalink --port /dev/ttyUSB0 update firmware/build/esp32_ota_link.bin
+python3 -m host.otalink --port /dev/ttyUSB0 reboot
+sleep 8
+python3 -m host.otalink --port /dev/ttyUSB0 info
+```
+
+Shell mode avoids the extra serial-open reset:
+
+```text
+otalink> update firmware/build/esp32_ota_link.bin
+otalink> reboot
+otalink> info
+```
+
+If `info` is run immediately after reboot, `OTA state: PENDING_VERIFY` is
+normal. After the example health task marks the app valid, it changes to
+`OTA state: VALID`.
 
 The `rollback` command marks the running app invalid and reboots into the
 previous valid OTA partition when ESP-IDF rollback is available.
@@ -250,6 +282,7 @@ By default, `ota_link_start()` uses:
 ```text
 UART:        UART_NUM_0
 Baud:        115200
+Pins:        ESP-IDF defaults for the selected UART
 RX buffer:   2048 bytes
 Task stack:  8192 bytes
 Priority:    5
@@ -261,12 +294,45 @@ For custom UART settings:
 ```c
 ota_link_config_t config = OTA_LINK_DEFAULT_CONFIG();
 config.uart_port = UART_NUM_1;
+config.tx_io_num = 17;
+config.rx_io_num = 18;
 config.baud_rate = 921600;
 config.auto_mark_app_valid = true;
 config.auto_mark_valid_delay_ms = 5000;
 
 ESP_ERROR_CHECK(ota_link_start_with_config(&config));
 ```
+
+When using a UART other than the board's default console UART, set
+`tx_io_num` and `rx_io_num` explicitly for your board wiring.
+
+For production hardware, prefer a dedicated UART or custom transport instead of
+sharing UART0 with ESP-IDF console logs.
+
+To require HMAC-SHA256 authentication before reboot, rollback, OTA update, or
+abort commands:
+
+```c
+static const uint8_t ota_auth_key[] = "service-secret";
+
+ota_link_config_t config = OTA_LINK_DEFAULT_CONFIG();
+config.auth_key = ota_auth_key;
+config.auth_key_len = sizeof(ota_auth_key) - 1;
+config.require_authentication = true;
+
+ESP_ERROR_CHECK(ota_link_start_with_config(&config));
+```
+
+The example app can also enable this through menuconfig:
+
+```bash
+cd firmware
+idf.py -B build_esp32c3_4mb_2ota menuconfig
+```
+
+Then enable `esp32_ota_link example -> Require OTA link authentication in the
+example app`, set the demo key, rebuild, and use the host with `--auth-key`.
+
 ## Current API Surface
 
 The firmware side already exposes a reusable ESP-IDF C API through
@@ -445,6 +511,21 @@ ota_1: VALID
 Rollback possible: no
 ```
 
+The ESP32-C3 `esp32c3_4mb_2ota` profile has also been tested on real hardware:
+
+```text
+Hardware tests:
+ping
+info
+interrupted OTA + abort
+full OTA + reboot + app validation
+
+Manual power-loss test:
+power removed at 33% upload
+running partition stayed on the previous valid slot
+half-written target slot did not become bootable
+```
+
 ## Protocol
 
 Packet format:
@@ -471,15 +552,57 @@ python3 -m pytest
 ```
 
 These tests cover packet building, streaming parse behavior, fragmented packets,
-garbage before magic bytes, back-to-back packets, bad CRC rejection, and info
-payload parsing.
+garbage before magic bytes, back-to-back packets, bad CRC rejection, info
+payload parsing, OTA payload helpers, host retry behavior, and firmware metadata
+handling. Hardware tests cover ping, info, interrupted update abort, full OTA
+transfer, reboot, and app validation.
+
+With hardware connected, set the serial port to run the opt-in ESP32 tests:
+
+```bash
+OTALINK_PORT=/dev/ttyUSB0 python3 -m pytest -m hardware
+```
+
+To include a full OTA transfer in the hardware test run, also set the firmware
+image path:
+
+```bash
+OTALINK_PORT=/dev/ttyUSB0 \
+OTALINK_FIRMWARE=firmware/build_esp32c3_4mb_2ota/esp32_ota_link.bin \
+python3 -m pytest -m hardware
+```
+
+For an authenticated device, pass `OTALINK_AUTH_KEY` to the hardware tests:
+
+```bash
+OTALINK_PORT=/dev/ttyUSB0 \
+OTALINK_AUTH_KEY=service-secret \
+OTALINK_FIRMWARE=firmware/build_esp32c3_4mb_2ota/esp32_ota_link.bin \
+python3 -m pytest -m hardware
+```
 
 ## Roadmap
 
+Completed:
+
+- NVS init no longer erases application configuration
+- OTA_DATA duplicate retry handling for lost ACKs
+- firmware version is read from ESP-IDF app metadata
+- configurable UART TX/RX/RTS/CTS pins
+- UART0 console-log risk documented and warned at runtime
+- optional HMAC-SHA256 link authentication
+- host tests for protocol, retry, auth, and metadata
+- ESP32-C3 hardware tests for ping, info, interrupted OTA abort, full OTA,
+  reboot, and validation
+- manual power-loss test during OTA upload
+
+Remaining:
+
 - automatic reboot/reconnect after update
-- OTA_DATA retry logic
+- firmware-side command unit tests
+- power-failure recovery tests
 - richer application health-check hooks
-- optional authentication and firmware signature verification
+- firmware signature verification
 - full host Python API
 - full host C API
 - full host C++ API

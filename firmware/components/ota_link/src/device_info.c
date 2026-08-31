@@ -1,6 +1,7 @@
 #include "device_info.h"
 
 #include <inttypes.h>
+#include <stdbool.h>
 #include <string.h>
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
@@ -14,9 +15,6 @@
 #include "nvs_flash.h"
 #include "protocol.h"
 
-#define FW_MAJOR 0
-#define FW_MINOR 1
-#define FW_PATCH 3
 #define OTA_SUBTYPE_MIN ESP_PARTITION_SUBTYPE_APP_OTA_0
 #define OTA_SUBTYPE_MAX ESP_PARTITION_SUBTYPE_APP_OTA_15
 
@@ -107,12 +105,62 @@ static bool partition_is_ota_slot(const esp_partition_t *partition)
         partition->subtype <= OTA_SUBTYPE_MAX;
 }
 
+static bool parse_version_component(const char **cursor, uint8_t *component)
+{
+    const char *value = *cursor;
+    uint32_t parsed = 0;
+    if (*value < '0' || *value > '9') {
+        return false;
+    }
+
+    while (*value >= '0' && *value <= '9') {
+        parsed = (parsed * 10U) + (uint32_t)(*value - '0');
+        if (parsed > UINT8_MAX) {
+            return false;
+        }
+        value++;
+    }
+
+    *component = (uint8_t)parsed;
+    *cursor = value;
+    return true;
+}
+
+static void parse_app_version(const char *version, uint8_t *major, uint8_t *minor, uint8_t *patch)
+{
+    *major = 0;
+    *minor = 0;
+    *patch = 0;
+    if (version == NULL) {
+        return;
+    }
+
+    if (*version == 'v' || *version == 'V') {
+        version++;
+    }
+
+    const char *cursor = version;
+    uint8_t parsed_major = 0;
+    uint8_t parsed_minor = 0;
+    uint8_t parsed_patch = 0;
+    if (!parse_version_component(&cursor, &parsed_major) || *cursor++ != '.' ||
+        !parse_version_component(&cursor, &parsed_minor) || *cursor++ != '.' ||
+        !parse_version_component(&cursor, &parsed_patch)) {
+        return;
+    }
+
+    *major = parsed_major;
+    *minor = parsed_minor;
+    *patch = parsed_patch;
+}
+
 void device_info_init(void)
 {
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_init();
+        ESP_LOGW(TAG, "NVS init requires maintenance; boot count disabled: %s",
+                 esp_err_to_name(err));
+        return;
     }
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "NVS init failed: %s", esp_err_to_name(err));
@@ -163,7 +211,12 @@ size_t device_info_build_payload(uint8_t *buffer, size_t capacity)
     const char *running_ota_state = ota_state_name(ota_state);
     const char *idf_version = desc ? desc->idf_ver : "unknown";
     const char *project_name = desc ? desc->project_name : "esp32_ota_link";
+    const char *app_version = desc ? desc->version : NULL;
     const char *build_date = desc ? desc->date : "unknown";
+    uint8_t fw_major = 0;
+    uint8_t fw_minor = 0;
+    uint8_t fw_patch = 0;
+    parse_app_version(app_version, &fw_major, &fw_minor, &fw_patch);
 
     size_t offset = 0;
     if (capacity < 17) {
@@ -171,9 +224,9 @@ size_t device_info_build_payload(uint8_t *buffer, size_t capacity)
     }
 
     buffer[offset++] = PROTOCOL_VERSION;
-    buffer[offset++] = FW_MAJOR;
-    buffer[offset++] = FW_MINOR;
-    buffer[offset++] = FW_PATCH;
+    buffer[offset++] = fw_major;
+    buffer[offset++] = fw_minor;
+    buffer[offset++] = fw_patch;
     put_u32_le(buffer, &offset, (uint32_t)(esp_timer_get_time() / 1000000ULL));
     put_u32_le(buffer, &offset, (uint32_t)heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
     put_u32_le(buffer, &offset, s_boot_count);

@@ -68,11 +68,18 @@ When ESP-IDF rollback is enabled, a newly booted OTA app must be marked valid by
 the application after health checks pass. Until then, ESP-IDF can roll back to
 the previous valid partition.
 
+Many USB-serial ESP32 development boards reset whenever the serial port is
+opened. For OTA testing, prefer keeping the host shell open across `update`,
+`reboot`, and `info`, or wait long enough after reboot before reopening the port
+from a separate command. Seeing `PENDING_VERIFY` immediately after reboot is
+normal until the application health check marks the image valid.
+
 ## Defaults
 
 ```text
 UART:        UART_NUM_0
 Baud:        115200
+Pins:        ESP-IDF defaults for the selected UART
 RX buffer:   2048 bytes
 Task stack:  8192 bytes
 Priority:    5
@@ -84,12 +91,38 @@ Rollback:    manual app confirmation
 ```c
 ota_link_config_t config = OTA_LINK_DEFAULT_CONFIG();
 config.uart_port = UART_NUM_1;
+config.tx_io_num = 17;
+config.rx_io_num = 18;
 config.baud_rate = 921600;
 config.auto_mark_app_valid = true;
 config.auto_mark_valid_delay_ms = 5000;
 
 ESP_ERROR_CHECK(ota_link_start_with_config(&config));
 ```
+
+When using a UART other than the board's default console UART, set
+`tx_io_num` and `rx_io_num` explicitly for your board wiring.
+
+For production hardware, prefer a dedicated UART or custom transport instead of
+sharing UART0 with ESP-IDF console logs.
+
+## Authentication
+
+Set a pre-shared key to require HMAC-SHA256 authentication before reboot,
+rollback, OTA update, or abort commands:
+
+```c
+static const uint8_t ota_auth_key[] = "service-secret";
+
+ota_link_config_t config = OTA_LINK_DEFAULT_CONFIG();
+config.auth_key = ota_auth_key;
+config.auth_key_len = sizeof(ota_auth_key) - 1;
+config.require_authentication = true;
+
+ESP_ERROR_CHECK(ota_link_start_with_config(&config));
+```
+
+The host must pass the same key with `--auth-key`.
 
 ## Custom Transport
 

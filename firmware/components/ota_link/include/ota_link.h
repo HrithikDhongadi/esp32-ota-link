@@ -51,11 +51,26 @@ typedef struct {
 typedef struct {
     uart_port_t uart_port;
     int baud_rate;
+    int tx_io_num;
+    int rx_io_num;
+    int rts_io_num;
+    int cts_io_num;
     int rx_buffer_size;
     uint32_t task_stack_size;
     UBaseType_t task_priority;
     bool auto_mark_app_valid;
     uint32_t auto_mark_valid_delay_ms;
+
+    /**
+     * @brief Optional pre-shared key for HMAC-SHA256 command authentication.
+     *
+     * When require_authentication is true, reboot, rollback, OTA update, and
+     * abort commands require the host to authenticate with this key first.
+     * The key is copied during startup and may be released after the call.
+     */
+    const uint8_t *auth_key;
+    size_t auth_key_len;
+    bool require_authentication;
     const ota_link_transport_t *transport;
     void *transport_context;
 } ota_link_config_t;
@@ -67,11 +82,18 @@ typedef struct {
     { \
         .uart_port = UART_NUM_0, \
         .baud_rate = 115200, \
+        .tx_io_num = UART_PIN_NO_CHANGE, \
+        .rx_io_num = UART_PIN_NO_CHANGE, \
+        .rts_io_num = UART_PIN_NO_CHANGE, \
+        .cts_io_num = UART_PIN_NO_CHANGE, \
         .rx_buffer_size = 2048, \
         .task_stack_size = 8192, \
         .task_priority = 5, \
         .auto_mark_app_valid = false, \
         .auto_mark_valid_delay_ms = 5000, \
+        .auth_key = NULL, \
+        .auth_key_len = 0, \
+        .require_authentication = false, \
         .transport = NULL, \
         .transport_context = NULL, \
     }

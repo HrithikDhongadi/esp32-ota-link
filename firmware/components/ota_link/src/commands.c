@@ -1,5 +1,6 @@
 #include "commands.h"
 
+#include "auth.h"
 #include "device_info.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
@@ -32,7 +33,24 @@ void commands_handle_packet(const protocol_packet_t *packet)
         break;
     }
 
+    case CMD_AUTH: {
+        protocol_error_t error = auth_handle_packet(packet);
+        if (error != ERR_OK) {
+            protocol_send_nack(packet->sequence, error);
+        }
+        break;
+    }
+
     case CMD_REBOOT:
+        {
+        const uint8_t *payload = NULL;
+        uint16_t length = 0;
+        protocol_error_t error = auth_unwrap_packet(packet, &payload, &length);
+        (void)payload;
+        if (error != ERR_OK || length != 0) {
+            protocol_send_nack(packet->sequence, error != ERR_OK ? error : ERR_INVALID_LENGTH);
+            break;
+        }
         if (ota_manager_is_active()) {
             protocol_send_nack(packet->sequence, ERR_BUSY);
             break;
@@ -41,8 +59,18 @@ void commands_handle_packet(const protocol_packet_t *packet)
         vTaskDelay(pdMS_TO_TICKS(100));
         esp_restart();
         break;
+        }
 
     case CMD_ROLLBACK:
+        {
+        const uint8_t *payload = NULL;
+        uint16_t length = 0;
+        protocol_error_t error = auth_unwrap_packet(packet, &payload, &length);
+        (void)payload;
+        if (error != ERR_OK || length != 0) {
+            protocol_send_nack(packet->sequence, error != ERR_OK ? error : ERR_INVALID_LENGTH);
+            break;
+        }
         if (ota_manager_is_active()) {
             protocol_send_nack(packet->sequence, ERR_BUSY);
             break;
@@ -55,9 +83,15 @@ void commands_handle_packet(const protocol_packet_t *packet)
         vTaskDelay(pdMS_TO_TICKS(100));
         ota_link_mark_app_invalid_and_reboot();
         break;
+        }
 
     case CMD_OTA_BEGIN: {
-        protocol_error_t error = ota_manager_begin(packet->payload, packet->length);
+        const uint8_t *payload = NULL;
+        uint16_t length = 0;
+        protocol_error_t error = auth_unwrap_packet(packet, &payload, &length);
+        if (error == ERR_OK) {
+            error = ota_manager_begin(payload, length);
+        }
         if (error == ERR_OK) {
             protocol_send_ack(packet->sequence);
         } else {
@@ -67,7 +101,16 @@ void commands_handle_packet(const protocol_packet_t *packet)
     }
 
     case CMD_OTA_ABORT: {
-        protocol_error_t error = ota_manager_abort();
+        const uint8_t *payload = NULL;
+        uint16_t length = 0;
+        protocol_error_t error = auth_unwrap_packet(packet, &payload, &length);
+        (void)payload;
+        if (error == ERR_OK && length != 0) {
+            error = ERR_INVALID_LENGTH;
+        }
+        if (error == ERR_OK) {
+            error = ota_manager_abort();
+        }
         if (error == ERR_OK) {
             protocol_send_ack(packet->sequence);
         } else {
@@ -77,7 +120,12 @@ void commands_handle_packet(const protocol_packet_t *packet)
     }
 
     case CMD_OTA_DATA: {
-        protocol_error_t error = ota_manager_write_data(packet->payload, packet->length);
+        const uint8_t *payload = NULL;
+        uint16_t length = 0;
+        protocol_error_t error = auth_unwrap_packet(packet, &payload, &length);
+        if (error == ERR_OK) {
+            error = ota_manager_write_data(payload, length);
+        }
         if (error == ERR_OK) {
             protocol_send_ack(packet->sequence);
         } else {
@@ -87,7 +135,16 @@ void commands_handle_packet(const protocol_packet_t *packet)
     }
 
     case CMD_OTA_END: {
-        protocol_error_t error = ota_manager_end();
+        const uint8_t *payload = NULL;
+        uint16_t length = 0;
+        protocol_error_t error = auth_unwrap_packet(packet, &payload, &length);
+        (void)payload;
+        if (error == ERR_OK && length != 0) {
+            error = ERR_INVALID_LENGTH;
+        }
+        if (error == ERR_OK) {
+            error = ota_manager_end();
+        }
         if (error == ERR_OK) {
             protocol_send_ack(packet->sequence);
         } else {

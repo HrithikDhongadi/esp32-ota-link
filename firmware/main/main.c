@@ -32,6 +32,12 @@ void app_main(void)
 {
     ota_link_config_t config = OTA_LINK_DEFAULT_CONFIG();
     config.auto_mark_app_valid = false;
+#if CONFIG_ESP32_OTA_LINK_EXAMPLE_REQUIRE_AUTH
+    static const uint8_t auth_key[] = CONFIG_ESP32_OTA_LINK_EXAMPLE_AUTH_KEY;
+    config.auth_key = auth_key;
+    config.auth_key_len = sizeof(auth_key) - 1;
+    config.require_authentication = true;
+#endif
     ESP_ERROR_CHECK(ota_link_start_with_config(&config));
     ESP_LOGI(TAG, "example app started");
 

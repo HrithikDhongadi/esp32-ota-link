@@ -3,6 +3,7 @@ idf_component_register(
         "src/ota_link.c"
         "src/protocol.c"
         "src/commands.c"
+        "src/auth.c"
         "src/device_info.c"
         "src/ota_manager.c"
     INCLUDE_DIRS "include"
@@ -16,5 +17,6 @@ idf_component_register(
         freertos
         heap
         log
+        mbedtls
         nvs_flash
 )

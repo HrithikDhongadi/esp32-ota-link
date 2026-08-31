@@ -28,6 +28,7 @@ Maximum payload for version 1 is 1024 bytes.
 0x02 GET_INFO
 0x03 REBOOT
 0x04 ROLLBACK
+0x05 AUTH
 
 0x10 OTA_BEGIN
 0x11 OTA_DATA
@@ -52,6 +53,50 @@ status: u8
 ```text
 error_code: u8
 ```
+
+`0x06 AUTH_REQUIRED` means the command needs a valid authentication session or
+the packet authentication tag was invalid.
+
+## Optional Authentication
+
+Devices may require authentication for mutating commands. `PING`, `GET_INFO`,
+and `AUTH` remain available before authentication so hosts can discover and
+establish a session.
+
+Protected commands are `REBOOT`, `ROLLBACK`, `OTA_BEGIN`, `OTA_DATA`,
+`OTA_END`, and `OTA_ABORT`.
+
+Authentication uses a pre-shared key and HMAC-SHA256:
+
+```text
+Host -> device AUTH: client_nonce: 16 bytes
+Device -> host ACK:  status: u8, server_nonce: 16 bytes
+Host -> device AUTH: client_nonce: 16 bytes, proof_tag: 16 bytes
+Device -> host ACK:  status: u8
+```
+
+The proof tag is the first 16 bytes of:
+
+```text
+HMAC-SHA256(auth_key, "auth-proof" || client_nonce || server_nonce)
+```
+
+Both sides derive a session key:
+
+```text
+HMAC-SHA256(auth_key, "session" || client_nonce || server_nonce)
+```
+
+Authenticated command payloads append a 16-byte tag to the original command
+payload:
+
+```text
+payload: original_payload || auth_tag
+auth_tag: first 16 bytes of HMAC-SHA256(session_key, command || sequence || original_payload)
+```
+
+`sequence` is encoded little-endian. Because the tag consumes 16 payload bytes,
+authenticated `OTA_DATA` chunks carry up to 1000 firmware bytes.
 
 ## GET_INFO Response Payload
 
@@ -105,11 +150,12 @@ not write firmware bytes and does not change the boot partition.
 ```text
 chunk_number: u32
 firmware_offset: u32
-chunk_data: 1..1016 bytes
+chunk_data: 1..1016 bytes unauthenticated, 1..1000 bytes authenticated
 ```
 
 Each `OTA_DATA` packet writes one firmware chunk to the active OTA handle. The
-ESP32 rejects chunks whose offset does not match the next expected byte.
+ESP32 accepts an exact duplicate of the most recently written chunk so the host
+can retry safely if the ACK is lost. Other offsets are rejected.
 
 ## OTA_END Payload
 

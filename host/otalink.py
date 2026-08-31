@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
+import os
 from pathlib import Path
 import shlex
 import sys
@@ -12,6 +14,9 @@ from .protocol import (
     ErrorCode,
     Packet,
     PacketParser,
+    AUTH_NONCE_SIZE,
+    AUTH_OTA_CHUNK_DATA_SIZE,
+    AUTH_TAG_SIZE,
     OTA_CHUNK_DATA_SIZE,
     build_ota_data_payload,
     build_ota_begin_payload,
@@ -21,6 +26,16 @@ from .protocol import (
 )
 
 SERIAL_READ_TIMEOUT = 0.02
+AUTH_PROOF_PREFIX = b"auth-proof"
+AUTH_SESSION_PREFIX = b"session"
+PROTECTED_COMMANDS = {
+    Command.REBOOT,
+    Command.ROLLBACK,
+    Command.OTA_BEGIN,
+    Command.OTA_DATA,
+    Command.OTA_END,
+    Command.OTA_ABORT,
+}
 
 
 class SerialTransport:
@@ -66,16 +81,83 @@ class SerialTransport:
 
 
 class OtaLinkClient:
-    def __init__(self, port: str, baud: int, timeout: float, retries: int) -> None:
-        self._transport = SerialTransport(port, baud, timeout)
+    def __init__(
+        self,
+        port: str,
+        baud: int,
+        timeout: float,
+        retries: int,
+        transport: SerialTransport | None = None,
+        auth_key: bytes | None = None,
+    ) -> None:
+        self._transport = transport or SerialTransport(port, baud, timeout)
         self._timeout = timeout
         self._retries = retries
         self._sequence = int(time.monotonic() * 1000) & 0xFFFF
+        self._auth_key = auth_key
+        self._session_key: bytes | None = None
+        self._authenticated = False
 
     def close(self) -> None:
         self._transport.close()
 
     def request(
+        self,
+        command: Command,
+        payload: bytes = b"",
+        timeout: float | None = None,
+    ) -> Packet:
+        if self._auth_key is not None and command in PROTECTED_COMMANDS:
+            self.authenticate()
+
+        for attempt in range(1, self._retries + 1):
+            sequence = self._next_sequence()
+            packet_payload = self._authenticated_payload(command, sequence, payload)
+            try:
+                return self._transport.request(
+                    build_packet(command, sequence, packet_payload),
+                    sequence,
+                    timeout or self._timeout,
+                )
+            except TimeoutError:
+                if attempt == self._retries:
+                    raise
+
+        raise TimeoutError("timed out waiting for response")
+
+    def authenticate(self) -> None:
+        if self._auth_key is None or self._authenticated:
+            return
+
+        client_nonce = os.urandom(AUTH_NONCE_SIZE)
+        challenge = self._request_unprotected(Command.AUTH, client_nonce, timeout=max(self._timeout, 3.0))
+        if challenge.command != Command.ACK or len(challenge.payload) != 1 + AUTH_NONCE_SIZE:
+            raise SystemExit("Authentication challenge failed")
+        ensure_ack(challenge, "AUTH challenge")
+
+        server_nonce = challenge.payload[1:]
+        self._session_key = hmac.new(
+            self._auth_key,
+            AUTH_SESSION_PREFIX + client_nonce + server_nonce,
+            hashlib.sha256,
+        ).digest()
+        proof = hmac.new(
+            self._auth_key,
+            AUTH_PROOF_PREFIX + client_nonce + server_nonce,
+            hashlib.sha256,
+        ).digest()[:AUTH_TAG_SIZE]
+        response = self._request_unprotected(
+            Command.AUTH,
+            client_nonce + proof,
+            timeout=max(self._timeout, 3.0),
+        )
+        ensure_ack(response, "AUTH proof")
+        self._authenticated = True
+
+    def max_ota_chunk_data_size(self) -> int:
+        return AUTH_OTA_CHUNK_DATA_SIZE if self._auth_key is not None else OTA_CHUNK_DATA_SIZE
+
+    def _request_unprotected(
         self,
         command: Command,
         payload: bytes = b"",
@@ -95,13 +177,41 @@ class OtaLinkClient:
 
         raise TimeoutError("timed out waiting for response")
 
+    def _authenticated_payload(self, command: Command, sequence: int, payload: bytes) -> bytes:
+        if self._auth_key is None or command not in PROTECTED_COMMANDS:
+            return payload
+        if self._session_key is None:
+            raise SystemExit("Authentication session is not established")
+
+        seq = sequence.to_bytes(2, "little")
+        tag = hmac.new(
+            self._session_key,
+            bytes([command]) + seq + payload,
+            hashlib.sha256,
+        ).digest()[:AUTH_TAG_SIZE]
+        return payload + tag
+
     def _next_sequence(self) -> int:
         self._sequence = (self._sequence + 1) & 0xFFFF
         return self._sequence
 
 
+def parse_auth_key(value: str | None) -> bytes | None:
+    if value is None:
+        return None
+    if value.startswith("hex:"):
+        return bytes.fromhex(value[4:])
+    return value.encode("utf-8")
+
+
 def open_client(args: argparse.Namespace) -> OtaLinkClient:
-    return OtaLinkClient(args.port, args.baud, args.timeout, args.retries)
+    return OtaLinkClient(
+        args.port,
+        args.baud,
+        args.timeout,
+        args.retries,
+        auth_key=parse_auth_key(args.auth_key),
+    )
 
 
 def ensure_ack(packet: Packet, context: str = "command") -> None:
@@ -226,7 +336,7 @@ def run_update_data(client: OtaLinkClient, port: str, firmware_path: Path, size:
 
     with firmware_path.open("rb") as firmware:
         while True:
-            chunk = firmware.read(OTA_CHUNK_DATA_SIZE)
+            chunk = firmware.read(client.max_ota_chunk_data_size())
             if not chunk:
                 break
 
@@ -390,6 +500,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--timeout", type=float, default=1.0)
     parser.add_argument("--retries", type=int, default=3)
+    parser.add_argument(
+        "--auth-key",
+        help="Pre-shared authentication key as text, or hex:<hex-bytes>",
+    )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("ping").set_defaults(func=cmd_ping)

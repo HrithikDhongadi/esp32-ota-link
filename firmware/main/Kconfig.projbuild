@@ -8,4 +8,19 @@ config ESP32_OTA_LINK_EXAMPLE_FORCE_INVALID
         seconds, mark itself invalid, and reboot into the previous valid OTA
         partition.
 
+config ESP32_OTA_LINK_EXAMPLE_REQUIRE_AUTH
+    bool "Require OTA link authentication in the example app"
+    default n
+    help
+        Require HMAC-SHA256 authentication for reboot, rollback, OTA update,
+        and abort commands. PING and GET_INFO remain available.
+
+config ESP32_OTA_LINK_EXAMPLE_AUTH_KEY
+    string "OTA link example authentication key"
+    default "service-secret"
+    depends on ESP32_OTA_LINK_EXAMPLE_REQUIRE_AUTH
+    help
+        Demo pre-shared key used by the example app when authentication is
+        enabled. Replace this in real products and avoid committing secrets.
+
 endmenu
